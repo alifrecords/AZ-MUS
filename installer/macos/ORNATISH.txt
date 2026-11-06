@@ -1,0 +1,6 @@
+AZ MUS — macOS
+==============
+1) "AZ MUS.app" ni Applications papkasiga torting.
+2) Dastur hali Apple tomonidan imzolanmagan, Terminalda bir marta:
+   xattr -dr com.apple.quarantine "/Applications/AZ MUS.app"
+3) Ochish. Audio sozlamalari: Audio menyusi.

@@ -1,0 +1,215 @@
+// =============================================================================
+//  AZ MUS — avtomatik test (--selftest) va demo loyiha (--demo)
+// =============================================================================
+#pragma once
+#include "AppEngine.h"
+using az::U;
+
+namespace testgen
+{
+// Sintetik "vokal": formantli impulslar + vibrato, iboralar bilan
+inline juce::File makeVocal (const juce::File& f, double bpm, int bars)
+{
+    const int sr = 48000; const double beat = 60.0 / bpm; const int n = (int) (bars * 4 * beat * sr);
+    juce::AudioBuffer<float> b (2, n); b.clear();
+    const double notes[] = { 220, 246.9, 261.6, 293.7, 329.6, 293.7, 261.6, 246.9 };
+    double ph = 0; float s1[3] {}, s2[3] {};
+    for (int i = 0; i < n; ++i)
+    {
+        const double t = (double) i / sr, inBar = std::fmod (t, beat * 4);
+        const bool sing = inBar < beat * 3.2;
+        const double f0 = notes[(int) (t / (beat * 2)) % 8] * (1 + 0.01 * std::sin (2 * juce::MathConstants<double>::pi * 5.5 * t));
+        ph += f0 / sr; float src = 0; if (ph >= 1) { ph -= 1; src = 1; }
+        const double F[3] = { 700, 1150, 2900 };
+        float v = 0;
+        for (int k = 0; k < 3; ++k)
+        {
+            const double w = 2 * juce::MathConstants<double>::pi * F[k] / sr, rr = 0.97;
+            const float y = (float) (src + 2 * rr * std::cos (w) * s1[k] - rr * rr * s2[k]); s2[k] = s1[k]; s1[k] = y;
+            v += y * (k == 0 ? 1.0f : k == 1 ? 0.55f : 0.25f);
+        }
+        const float env = sing ? (float) juce::jmin (1.0, inBar / 0.04) * (float) juce::jmin (1.0, (beat * 3.2 - inBar) / 0.08) : 0.0f;
+        b.setSample (0, i, v * 0.03f * env); b.setSample (1, i, v * 0.03f * env);
+    }
+    juce::WavAudioFormat wav; f.deleteFile();
+    if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 24, {}, 0)))
+        w->writeFromAudioSampleBuffer (b, 0, n);
+    return f;
+}
+
+// Sintetik baraban: kick / snare / hat
+inline juce::File makeDrums (const juce::File& f, double bpm, int bars)
+{
+    const int sr = 48000; const double step = 60.0 / bpm / 4; const int n = (int) (bars * 16 * step * sr);
+    juce::AudioBuffer<float> b (2, n); b.clear(); juce::Random r (3);
+    for (int s = 0; s < bars * 16; ++s)
+    {
+        const int at = (int) (s * step * sr), p = s % 16;
+        const bool kick = p == 0 || p == 7 || p == 10, snare = p == 4 || p == 12;
+        for (int i = 0; i < (int) (0.35 * sr) && at + i < n; ++i)
+        {
+            const double t = (double) i / sr; float v = 0;
+            if (kick)  v += 0.8f * (float) (std::sin (2 * juce::MathConstants<double>::pi * (45 + 90 * std::exp (-t * 30)) * t) * std::exp (-t * 9));
+            if (snare) v += 0.35f * (r.nextFloat() * 2 - 1) * (float) std::exp (-t * 22) + 0.2f * (float) (std::sin (2 * juce::MathConstants<double>::pi * 190 * t) * std::exp (-t * 25));
+            if (p % 2 == 0) v += 0.08f * (r.nextFloat() * 2 - 1) * (float) std::exp (-t * 90);
+            b.addSample (0, at + i, v); b.addSample (1, at + i, v);
+        }
+    }
+    juce::WavAudioFormat wav; f.deleteFile();
+    if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 24, {}, 0)))
+        w->writeFromAudioSampleBuffer (b, 0, n);
+    return f;
+}
+
+inline te::Plugin::Ptr findAndInsertVst3 (az::AppEngine& app, te::AudioTrack& t, const juce::String& nameContains)
+{
+    for (auto& d : app.engine.getPluginManager().knownPluginList.getTypes())
+        if (d.name.containsIgnoreCase (nameContains))
+            return app.insertPlugin (t, te::ExternalPlugin::xmlTypeName, d);
+    return {};
+}
+}
+
+// Demo loyiha (skrinshot va birinchi tanishuv uchun)
+inline void makeDemo (az::AppEngine& app)
+{
+    using namespace testgen;
+    auto& e = *app.edit;
+    e.tempoSequence.getTempo (0)->setBpm (96);
+    e.state.setProperty ("azKey", "A minor", nullptr);
+    for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+    auto dir = app.editFile.getParentDirectory().getChildFile ("Audio"); dir.createDirectory();
+    const double bar = 4 * 60.0 / 96;
+    auto* vox = app.addAudioTrack ("Lead Vocal");
+    auto vf = makeVocal (dir.getChildFile ("Lead Vocal.wav"), 96, 8);
+    app.importAudio (*vox, vf, te::TimePosition::fromSeconds (bar * 4));
+    app.importAudio (*vox, vf, te::TimePosition::fromSeconds (bar * 14));
+    if (! findAndInsertVst3 (app, *vox, "AZ VERB")) app.insertPlugin (*vox, "reverb", {});
+    app.insertPlugin (*vox, "airwindows_pressure4", {});
+    auto* bv = app.addAudioTrack ("Back Vocal");
+    app.importAudio (*bv, vf, te::TimePosition::fromSeconds (bar * 8))->setGainDB (-6);
+    bv->getVolumePlugin()->setVolumeDb (-4);
+    auto* dr = app.addAudioTrack ("AZ Drum");
+    auto df = makeDrums (dir.getChildFile ("Drums 96.wav"), 96, 4);
+    for (int k = 0; k < 5; ++k) app.importAudio (*dr, df, te::TimePosition::fromSeconds (bar * 4 * k));
+    auto* bass = app.addInstrumentTrack ("808 Bass");
+    auto* pad = app.addInstrumentTrack ("Pad - Sand Air");
+    auto& ts = e.tempoSequence;
+    auto mk = [&] (te::AudioTrack* t, int fromBar, int bars) { return t->insertMIDIClip ("MIDI", { ts.toTime (te::tempo::BarsAndBeats { fromBar, {} }), ts.toTime (te::tempo::BarsAndBeats { fromBar + bars, {} }) }, nullptr); };
+    if (auto c = mk (bass, 4, 16))
+    {
+        c->setName ("808 - Am");
+        const int roots[] = { 45, 41, 48, 43 };
+        for (int b = 0; b < 16; ++b) for (int s : { 0, 3, 6 })
+            c->getSequence().addNote (roots[(b / 2) % 4] - 12, te::BeatPosition::fromBeats (b * 4 + s * 0.5), te::BeatDuration::fromBeats (s == 0 ? 1.4 : 0.9), 110, 0, nullptr);
+    }
+    if (auto c = mk (pad, 0, 20))
+    {
+        c->setName ("Pad Am - F - C - G");
+        const int ch[4][3] = { { 57, 60, 64 }, { 53, 57, 60 }, { 55, 60, 64 }, { 55, 59, 62 } };
+        for (int b = 0; b < 20; b += 2) for (int k = 0; k < 3; ++k)
+            c->getSequence().addNote (ch[(b / 2) % 4][k], te::BeatPosition::fromBeats (b * 4), te::BeatDuration::fromBeats (7.8), 80, 0, nullptr);
+    }
+    pad->getVolumePlugin()->setVolumeDb (-9); bass->getVolumePlugin()->setVolumeDb (-5);
+    auto& mm = e.getMarkerManager();
+    const struct { int b, len; const char* n; juce::Colour c; } ms[] = { { 0, 4, "Intro", az::dim2 }, { 4, 8, "Kuplet 1", az::blue }, { 12, 8, "Naqarot", az::red }, { 20, 4, "Outro", az::violet } };
+    for (auto& m : ms)
+        if (auto mc = mm.createMarker (-1, ts.toTime (te::tempo::BarsAndBeats { m.b, {} }), ts.toTime (te::tempo::BarsAndBeats { m.b + m.len, {} }) - ts.toTime (te::tempo::BarsAndBeats { m.b, {} }), nullptr))
+        { mc->setName (m.n); mc->setColour (m.c); }
+    e.getTransport().setLoopRange ({ ts.toTime (te::tempo::BarsAndBeats { 12, {} }), ts.toTime (te::tempo::BarsAndBeats { 20, {} }) });
+    e.getTransport().setPosition (ts.toTime (te::tempo::BarsAndBeats { 14, te::BeatDuration::fromBeats (1) }));
+    app.saveIfPossible();
+}
+
+// ---------------------------------------------------------------- avtomatik test
+inline int runSelfTest (const juce::StringArray& args)
+{
+    using namespace testgen;
+    int fails = 0;
+    auto check = [&fails] (bool ok, const juce::String& what) { std::printf ("  [%s] %s\n", ok ? "OK " : "XATO", what.toRawUTF8()); std::fflush (stdout); if (! ok) ++fails; };
+    const auto dir = juce::File (args[args.indexOf ("--selftest") + 1].isNotEmpty() ? args[args.indexOf ("--selftest") + 1] : "/tmp/azmus_test");
+    dir.deleteRecursively(); dir.createDirectory();
+    std::printf ("AZ MUS selftest -> %s\n", dir.getFullPathName().toRawUTF8());
+
+    auto app = std::make_unique<az::AppEngine>();
+    check (true, "Dvigatel ishga tushdi");
+
+    // tashqi VST3 (masalan AZ VERB) — ko'rsatilgan bo'lsa
+    const int vi = args.indexOf ("--vst3");
+    if (vi >= 0)
+    {
+        juce::OwnedArray<juce::PluginDescription> found;
+        for (auto* fmt : app->engine.getPluginManager().pluginFormatManager.getFormats())
+            if (fmt->getName() == "VST3")
+            {
+                std::printf ("       VST3: mightContain=%d exists=%d\n", (int) fmt->fileMightContainThisPluginType (args[vi + 1]), (int) juce::File (args[vi + 1]).exists());
+                app->engine.getPluginManager().knownPluginList.scanAndAddFile (args[vi + 1], false, found, *fmt);
+                juce::OwnedArray<juce::PluginDescription> direct; fmt->findAllTypesForFile (direct, args[vi + 1]);
+                std::printf ("       VST3 direct: %d\n", direct.size()); std::fflush (stdout);
+            }
+        check (found.size() > 0, "VST3 skan: " + (found.isEmpty() ? juce::String ("topilmadi") : found[0]->name + " (" + found[0]->manufacturerName + ")"));
+    }
+
+    const auto f = dir.getChildFile (U ("Test qo'shiq.azmus"));
+    app->newProject (f);
+    check (te::getAudioTracks (*app->edit).size() == 3, "Yangi loyiha: 3 ta standart trek (" + juce::String (te::getAudioTracks (*app->edit).size()) + ")");
+    { juce::String fm; for (auto* f2 : app->engine.getPluginManager().pluginFormatManager.getFormats()) fm << f2->getName() << " "; std::printf ("       formatlar: %s\n", fm.toRawUTF8()); }
+    makeDemo (*app);
+    auto tracks = te::getAudioTracks (*app->edit);
+    check (tracks.size() == 5, "Demo: 5 ta trek (" + juce::String (tracks.size()) + ")");
+    int clips = 0, notes = 0, plugs = 0, vst3 = 0;
+    for (auto* t : tracks)
+    {
+        clips += t->getClips().size();
+        for (auto* c : t->getClips()) if (auto* mc = dynamic_cast<te::MidiClip*> (c)) notes += mc->getSequence().getNumNotes();
+        for (auto* p : az::AppEngine::userPlugins (*t)) { ++plugs; if (dynamic_cast<te::ExternalPlugin*> (p)) ++vst3; }
+    }
+    check (clips >= 9, "Kliplar: " + juce::String (clips));
+    check (notes > 50, "MIDI notalar: " + juce::String (notes));
+    check (plugs >= 4, "Plaginlar (synth + effektlar): " + juce::String (plugs) + ", shundan VST3: " + juce::String (vst3));
+    check (app->edit->getMarkerManager().getMarkers().size() == 4, "Markerlar (Intro / Kuplet / Naqarot / Outro)");
+
+    // undo / redo
+    const int before = te::getAudioTracks (*app->edit).size();
+    app->edit->getUndoManager().beginNewTransaction();
+    app->addAudioTrack ("Undo test");
+    app->edit->getUndoManager().beginNewTransaction();
+    app->edit->getUndoManager().undo();
+    check (te::getAudioTracks (*app->edit).size() == before, "Undo trek qo'shishni bekor qiladi");
+
+    // saqlash -> qayta ochish
+    app->saveIfPossible();
+    check (f.existsAsFile() && f.getSize() > 1000, "Loyiha saqlandi (" + juce::String (f.getSize()) + " bayt)");
+    std::printf ("       qayta ochish...\n"); std::fflush (stdout);
+    auto app2 = std::make_unique<az::AppEngine>();
+    if (vi >= 0) { juce::OwnedArray<juce::PluginDescription> fd; for (auto* fmt : app2->engine.getPluginManager().pluginFormatManager.getFormats()) if (fmt->getName() == "VST3") app2->engine.getPluginManager().knownPluginList.scanAndAddFile (args[vi + 1], true, fd, *fmt); }
+    check (app2->openProject (f), "Loyiha qayta ochildi");
+    int clips2 = 0, plugs2 = 0;
+    for (auto* t : te::getAudioTracks (*app2->edit)) { clips2 += t->getClips().size(); plugs2 += az::AppEngine::userPlugins (*t).size(); }
+    check (clips2 == clips && plugs2 == plugs, "Qayta ochilgan loyiha bir xil (kliplar " + juce::String (clips2) + ", plaginlar " + juce::String (plugs2) + ")");
+    check (std::abs (app2->edit->tempoSequence.getTempo (0)->getBpm() - 96.0) < 0.01, "Temp saqlangan: 96 BPM");
+
+    // render (mixdown)
+    const auto out = dir.getChildFile ("mixdown.wav");
+    std::printf ("       render...\n"); std::fflush (stdout);
+    const bool rendered = app2->exportWav (out);
+    check (rendered && out.existsAsFile(), "WAV eksport (mixdown)");
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    if (auto r = std::unique_ptr<juce::AudioFormatReader> (fm.createReaderFor (out)))
+    {
+        juce::AudioBuffer<float> b ((int) r->numChannels, (int) r->lengthInSamples);
+        r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+        const float rms = b.getRMSLevel (0, 0, b.getNumSamples()), peak = b.getMagnitude (0, b.getNumSamples());
+        const double secs = (double) r->lengthInSamples / r->sampleRate;
+        std::printf ("       mixdown: %.1f s, %d Hz, RMS %.1f dBFS, cho'qqi %.1f dBFS\n", secs, (int) r->sampleRate, juce::Decibels::gainToDecibels (rms), juce::Decibels::gainToDecibels (peak));
+        check (secs > 30 && rms > 0.005f && peak <= 1.5f, "Mixdown tovushli va me'yorida");
+        // L/R farqi (stereo reverb ishlaganmi)
+        float diff = 0; for (int i = 0; i < b.getNumSamples(); ++i) diff += std::abs (b.getSample (0, i) - b.getSample (1, i));
+        check (diff / (float) b.getNumSamples() > 1.0e-4f, "Stereo maydon bor (reverb ishlagan)");
+    }
+    else check (false, "Mixdown faylini o'qish");
+
+    app2.reset(); app.reset();
+    std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
+    return fails == 0 ? 0 : 1;
+}
