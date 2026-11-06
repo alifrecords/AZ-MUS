@@ -9,7 +9,7 @@ namespace az
 {
 inline juce::TextButton* iconButton (juce::TextButton& b, const char* icon, const char* tip, juce::Colour accent = red)
 {
-    b.setButtonText (icon); b.setTooltip (juce::String::fromUTF8 (tip));
+    b.setButtonText (icon); b.setTooltip (U (tip));
     b.getProperties().set ("accent", (juce::int64) accent.getARGB());
     return &b;
 }
@@ -46,7 +46,7 @@ public:
         float cx = x + 22;
         for (int i = 0; i < 4; ++i)
         {
-            const float w = i == 0 ? 82.0f : i == 3 ? 70.0f : 56.0f;
+            const float w = i == 0 ? 82.0f : i == 3 ? 86.0f : 58.0f;
             caps (g, ks[i], { cx, 4, w, 10 }, 8.5f);
             label (g, vs[i], { cx, 16, w + 10, 20 }, 13, text, Justification::centredLeft, 600);
             cells.add ({ cx, 0, w, (float) getHeight() });
@@ -95,51 +95,87 @@ private:
 };
 
 // =============================================================================  Yuqori panel
+// 1-qator: menyu · 2-qator: logotip + til, transport, displey, panel tugmalari, CPU
 class TopBar : public juce::Component
 {
 public:
+    static constexpr int menuH = 26, barH = 58;
+    std::function<void (int)> onLanguage, onTogglePanel;
+
     TopBar (AppEngine& a, juce::MenuBarModel* model) : app (a), menu (model), lcd (a)
     {
         addAndMakeVisible (menu); addAndMakeVisible (lcd);
-        iconButton (startB, "#start", "Boshiga (Home)"); iconButton (rewB, "#rew", "Orqaga"); iconButton (ffB, "#ff", "Oldinga");
-        iconButton (stopB, "#stop", "To'xtatish"); iconButton (playB, "#play", "Ijro (Space)", green); iconButton (recB, "#rec", "Yozish (R)", red);
-        iconButton (loopB, "#loop", "Loop (L)"); iconButton (clickB, "#click", "Metronom (C)");
+        iconButton (startB, "#start", "Boshiga (Home / Num .)"); iconButton (rewB, "#rew", "Orqaga (Num -)"); iconButton (ffB, "#ff", "Oldinga (Num +)");
+        iconButton (stopB, "#stop", "To'xtatish (Num 0)"); iconButton (playB, "#play", "Ijro (Space / Enter)", green); iconButton (recB, "#rec", "Yozish (R / Num *)", red);
+        iconButton (loopB, "#loop", "Loop (L / Num /)"); iconButton (clickB, "#click", "Metronom (C)");
         for (auto* b : { &startB, &rewB, &ffB, &stopB, &playB, &recB, &loopB, &clickB }) addAndMakeVisible (b);
-        recB.getProperties().set ("accent", (juce::int64) red.getARGB());
+        const char* langs[] = { "UZ", "RU", "EN" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto* b = langB.add (new juce::TextButton (langs[i]));
+            b->getProperties().set ("radius", 5.0f);
+            b->setClickingTogglesState (false);
+            b->onClick = [this, i] { if (onLanguage) onLanguage (i); };
+            addAndMakeVisible (b);
+        }
+        iconButton (pInsp, "#pinsp", "Inspektor (Alt+I)"); iconButton (pMedia, "#pmedia", "Media brauzer (F5)"); iconButton (pMix, "#pmix", "Mikser (F3)");
+        int k = 0;
+        for (auto* b : { &pInsp, &pMedia, &pMix }) { addAndMakeVisible (b); b->onClick = [this, k] { if (onTogglePanel) onTogglePanel (k); }; ++k; }
+        refreshLang();
     }
+    void refreshLang() { for (int i = 0; i < 3; ++i) langB[i]->setToggleState (i == lang, juce::dontSendNotification); repaint(); }
+    void setPanels (bool insp, bool media, bool mix)
+    {
+        pInsp.setToggleState (insp, juce::dontSendNotification); pMedia.setToggleState (media, juce::dontSendNotification); pMix.setToggleState (mix, juce::dontSendNotification);
+    }
+
     void resized() override
     {
-        auto r = getLocalBounds().reduced (14, 0);
-        r.removeFromLeft (196);
-        menu.setBounds (r.removeFromLeft (440).withSizeKeepingCentre (440, 30));
-        auto right = r.removeFromRight (170);
-        juce::ignoreUnused (right);
-        lcd.setBounds (r.removeFromRight (480).withSizeKeepingCentre (480, 42));
-        r.removeFromRight (14);
+        auto r = getLocalBounds();
+        auto mr = r.removeFromTop (menuH).reduced (8, 0);
+        menu.setBounds (mr.removeFromLeft (juce::jmin (mr.getWidth(), 640)));
+        r = r.reduced (14, 0);
+        r.removeFromLeft (172);                                   // logotip
+        for (auto* b : langB) { b->setBounds (r.removeFromLeft (30).withSizeKeepingCentre (30, 24)); r.removeFromLeft (3); }
+        r.removeFromLeft (14);
+        const bool narrow = getWidth() < 1400;
+        cpuW = narrow ? 0 : 158;
+        r.removeFromRight (cpuW);
+        for (auto* b : { &pMix, &pMedia, &pInsp }) { b->setBounds (r.removeFromRight (32).withSizeKeepingCentre (32, 28)); r.removeFromRight (4); }
+        r.removeFromRight (10);
+        const int lcdW = juce::jlimit (330, 480, r.getWidth() - 8 * 38 - 10);
+        lcd.setBounds (r.removeFromRight (lcdW).withSizeKeepingCentre (lcdW, 42));
+        r.removeFromRight (10);
         for (auto* b : { &clickB, &loopB, &recB, &playB, &stopB, &ffB, &rewB, &startB })
-        { b->setBounds (r.removeFromRight (34).withSizeKeepingCentre (34, 30)); r.removeFromRight (6); }
+        { b->setBounds (r.removeFromRight (34).withSizeKeepingCentre (34, 30)); r.removeFromRight (4); }
     }
     void paint (juce::Graphics& g) override
     {
         using namespace juce;
-        g.setGradientFill (ColourGradient (Colour (0xff0f0d10), 0, 0, Colour (0xff0a090c), 0, (float) getHeight(), false)); g.fillAll();
+        g.setColour (Colour (0xff0b0a0d)); g.fillRect (0, 0, getWidth(), menuH);
+        g.setColour (line); g.drawHorizontalLine (menuH - 1, 0, (float) getWidth());
+        auto bar = Rectangle<float> (0, (float) menuH, (float) getWidth(), (float) barH);
+        g.setGradientFill (ColourGradient (Colour (0xff0f0d10), 0, bar.getY(), Colour (0xff0a090c), 0, bar.getBottom(), false)); g.fillRect (bar);
         g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0, (float) getWidth());
-        logoMark (g, { 16, (float) getHeight() * 0.5f - 16, 32, 32 });
-        g.setFont (font (17, 700, 0.08f)); g.setColour (text); g.drawText ("AZ", Rectangle<float> (58, 10, 40, 20), Justification::centredLeft);
-        g.setColour (red); g.drawText ("MUS", Rectangle<float> (58 + textWidth (font (17, 700, 0.08f), "AZ "), 10, 60, 20), Justification::centredLeft);
-        label (g, "AZIMXODJAYEV MUSIC", { 58, 31, 150, 12 }, 8, dim, Justification::centredLeft, 500, 0.26f);
-        // CPU / kechikish
-        const float x = (float) getWidth() - 180;
-        caps (g, "CPU", { x, (float) getHeight() * 0.5f - 6, 30, 12 }, 9.5f, dim);
-        auto bar = Rectangle<float> (x + 32, (float) getHeight() * 0.5f - 2.5f, 42, 5);
-        g.setColour (Colours::white.withAlpha (0.07f)); g.fillRoundedRectangle (bar, 2.5f);
-        const float cpu = jlimit (0.0f, 1.0f, app.engine.getDeviceManager().getCpuUsage());
-        g.setColour (cpu < 0.5f ? green : cpu < 0.8f ? yellow : red); g.fillRoundedRectangle (bar.withWidth (jmax (3.0f, 42 * cpu)), 2.5f);
-        auto& dm = app.engine.getDeviceManager();
-        const double lat = dm.getBlockSizeMs();
-        auto* dev = dm.deviceManager.getCurrentAudioDevice();
-        const String type = dev ? dm.deviceManager.getCurrentAudioDeviceType() : "Audio yo'q";
-        caps (g, type.toUpperCase() + (dev ? U (" \xc2\xb7 ") + String (lat, 1) + " ms" : String()), { x + 82, (float) getHeight() * 0.5f - 7, 110, 14 }, 9.5f, dev ? green : red);
+        const float cy = bar.getCentreY();
+        logoMark (g, { 16, cy - 16, 32, 32 });
+        g.setFont (font (17, 700, 0.08f)); g.setColour (text); g.drawText ("AZ", Rectangle<float> (58, cy - 19, 40, 20), Justification::centredLeft);
+        g.setColour (red); g.drawText ("MUS", Rectangle<float> (58 + textWidth (font (17, 700, 0.08f), "AZ "), cy - 19, 60, 20), Justification::centredLeft);
+        g.setColour (dim); g.setFont (font (8, 500, 0.26f)); g.drawText ("AZIMXODJAYEV MUSIC", Rectangle<float> (58, cy + 2, 130, 12), Justification::centredLeft);
+        if (cpuW > 0)
+        {
+            const float x = (float) getWidth() - 14 - (float) cpuW + 8;
+            caps (g, "CPU", { x, cy - 6, 30, 12 }, 9.5f, dim);
+            auto b = Rectangle<float> (x + 32, cy - 2.5f, 36, 5);
+            g.setColour (Colours::white.withAlpha (0.07f)); g.fillRoundedRectangle (b, 2.5f);
+            const float cpu = jlimit (0.0f, 1.0f, app.engine.getDeviceManager().getCpuUsage());
+            g.setColour (cpu < 0.5f ? green : cpu < 0.8f ? yellow : red); g.fillRoundedRectangle (b.withWidth (jmax (3.0f, 36 * cpu)), 2.5f);
+            auto& dm = app.engine.getDeviceManager();
+            auto* dev = dm.deviceManager.getCurrentAudioDevice();
+            const String type = dev ? dm.deviceManager.getCurrentAudioDeviceType() : U ("Audio yo'q");
+            const double lat = dev ? (dev->getOutputLatencyInSamples() + dev->getCurrentBufferSizeSamples()) * 1000.0 / jmax (1.0, dev->getCurrentSampleRate()) : 0.0;
+            caps (g, type.toUpperCase() + (dev ? U (" \xc2\xb7 ") + String (lat, 1) + " ms" : String()), { x + 74, cy - 7, (float) cpuW - 74, 14 }, 9.5f, dev ? green : red);
+        }
     }
     void refreshState()
     {
@@ -149,11 +185,12 @@ public:
         recB.setToggleState (t.isRecording(), juce::dontSendNotification);
         loopB.setToggleState (t.looping, juce::dontSendNotification);
         clickB.setToggleState (app.edit->clickTrackEnabled, juce::dontSendNotification);
-        lcd.repaint(); repaint (getWidth() - 190, 0, 190, getHeight());
+        lcd.repaint(); if (cpuW > 0) repaint (getWidth() - cpuW - 20, menuH, cpuW + 20, barH);
     }
-    juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB;
+    juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB, pInsp, pMedia, pMix;
 private:
     AppEngine& app; juce::MenuBarComponent menu; LcdDisplay lcd;
+    juce::OwnedArray<juce::TextButton> langB; int cpuW = 158;
 };
 
 // =============================================================================  Plagin menyusi
@@ -430,7 +467,7 @@ public:
     explicit Mixer (AppEngine& a) : app (a) { addAndMakeVisible (vp); vp.setViewedComponent (&holder, false); vp.setScrollBarsShown (false, true); startTimerHz (25); }
     void rebuild()
     {
-        strips.clear(); master.reset();
+        strips.clear(); ids.clear(); master.reset();
         if (! app.edit) return;
         for (auto* t : te::getAudioTracks (*app.edit)) { auto* s = strips.add (new ChannelStrip (app, t)); holder.addAndMakeVisible (s); ids.add (t->itemID); }
         master = std::make_unique<ChannelStrip> (app, nullptr); addAndMakeVisible (*master);
@@ -580,6 +617,7 @@ class StatusBar : public juce::Component
 {
 public:
     explicit StatusBar (AppEngine& a) : app (a) {}
+    juce::String message; juce::uint32 messageTime = 0;
     void paint (juce::Graphics& g) override
     {
         using namespace juce;
@@ -601,6 +639,15 @@ public:
             item (U ("Loyiha: ") + app.editFile.getFileName(), dim);
             item (U ("Treklar: ") + String (te::getAudioTracks (*app.edit).size()), dim);
             item (U ("Saqlangan: ") + (app.lastSave.toMilliseconds() > 0 ? app.lastSave.toString (false, true, false, true) : U ("\xe2\x80\x94")), dim);
+        }
+        if (message.isNotEmpty() && juce::Time::getMillisecondCounter() - messageTime < 7000)
+        {
+            const float w = textWidth (font (11, 500), message) + 30;
+            auto r = Rectangle<float> (jmax (x + 10, (float) getWidth() * 0.5f - w * 0.5f), 3, w, (float) getHeight() - 6);
+            g.setColour (red.withAlpha (0.14f)); g.fillRoundedRectangle (r, 6);
+            g.setColour (red.withAlpha (0.4f)); g.drawRoundedRectangle (r, 6, 1);
+            g.setColour (Colours::white); g.setFont (font (11, 500)); g.drawText (message, r, Justification::centred, true);
+            return;
         }
         label (g, "AZ MUS " + String (JUCE_APPLICATION_VERSION_STRING) + U (" \xc2\xb7 Azimxodjayev Music \xc2\xb7 Powered by Tracktion Engine"),
                getLocalBounds().toFloat().withTrimmedRight (16), 10, dim2, Justification::centredRight, 500, 0.08f);

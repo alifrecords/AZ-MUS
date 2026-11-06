@@ -7,6 +7,42 @@
 
 namespace az
 {
+// Klaviatura xaritasi (yordam oynasi va hujjat uchun yagona manba)
+struct KeyHelp { const char* key; const char* what; };
+inline const KeyHelp keyHelp[] = {
+    { "Space",                "Ijro / to'xtatish" },
+    { "Enter (Num)",          "Ijro" },
+    { "Num 0",                "To'xtatish (2x \xe2\x80\x94 boshiga)" },
+    { "R / Num *",            "Yozish" },
+    { "L / Num /",            "Loop yoqish / o'chirish" },
+    { "C",                    "Metronom" },
+    { "Home / Num .",         "Boshiga" },
+    { "End",                  "Loyiha oxiriga" },
+    { "\xe2\x86\x90 \xe2\x86\x92 / Num - +", "Bir takt orqaga / oldinga" },
+    { "B",                    "Bounce: tanlangan kliplarni bitta audioga" },
+    { "P",                    "Locatorlar (loop) = tanlangan kliplar" },
+    { "S / Ctrl+E",           "Kursor joyida kesish" },
+    { "Ctrl+D",               "Nusxa" },
+    { "Del",                  "O'chirish" },
+    { "Ctrl+A",               "Hammasini belgilash" },
+    { "Esc",                  "Belgilashni bekor qilish" },
+    { "1 2 3 4",              "Asbob: tanlash / qaychi / o'chirg'ich / mute" },
+    { "H / G  (+ / -)",       "Gorizontal zoom" },
+    { "Shift+H / Shift+G",    "Trek balandligi" },
+    { "Ctrl+Shift+A",         "Hammasini ekranga sig'dirish" },
+    { "J",                    "Snap yoqish / o'chirish" },
+    { "F3",                   "Mikser" },
+    { "F4",                   "Audio sozlamalari" },
+    { "F5",                   "Media brauzer" },
+    { "Alt+I",                "Inspektor" },
+    { "Ctrl+Z / Ctrl+Y",      "Undo / Redo" },
+    { "Ctrl+S / Ctrl+Shift+S","Saqlash / boshqa nom bilan" },
+    { "Ctrl+N / Ctrl+O",      "Yangi / ochish" },
+    { "Ctrl+T",               "Trek qo'shish" },
+    { "Ctrl+I",               "Audio import" },
+    { "Ctrl+Shift+E",         "WAV'ga eksport" },
+};
+
 class MainComponent : public juce::Component, public juce::MenuBarModel, private juce::ChangeListener, private juce::Timer
 {
 public:
@@ -14,31 +50,45 @@ public:
         : app (a), top (a, this), inspector (a, vs), ruler (a, vs), headers (a, vs), lanes (a, vs), mixer (a), media (a), status (a)
     {
         setOpaque (true);
-        for (auto* c : std::initializer_list<juce::Component*> { &top, &inspector, &ruler, &headers, &lanes, &mixer, &media, &status, &toolAdd, &toolDraw, &toolSplit, &toolSnap })
+        for (auto* c : std::initializer_list<juce::Component*> { &top, &inspector, &ruler, &headers, &lanes, &mixer, &media, &status, &toolAdd, &toolSnap, &toolBounce })
             addAndMakeVisible (c);
-        iconButton (toolAdd, "#plus", "Trek qo'shish (Ctrl+T)"); iconButton (toolDraw, "#pencil", "MIDI klip (2x bosish)");
-        iconButton (toolSplit, "#scissors", "Kursor joyida bo'lish (Ctrl+E)"); iconButton (toolSnap, "#grid", "Snap (G)");
+        iconButton (toolAdd, "#plus", "Trek qo'shish (Ctrl+T)");
+        iconButton (toolSnap, "#grid", "Snap (J)");
+        iconButton (toolBounce, "#bounce", "Bounce (B)");
+        const char* tIcons[] = { "#arrow", "#scissors", "#eraser", "#mute" };
+        const char* tTips[]  = { "Tanlash (1)", "Qaychi (2)", "O'chirg'ich (3)", "Mute (4)" };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* b = tools.add (new juce::TextButton()); iconButton (*b, tIcons[i], tTips[i]);
+            b->onClick = [this, i] { setTool (i); };
+            addAndMakeVisible (b);
+        }
+        setTool (0);
         toolSnap.setToggleState (vs.snap, juce::dontSendNotification);
         toolAdd.onClick = [this] { showAddTrackMenu(); };
-        toolDraw.onClick = [this] { if (auto* t = inspector.track()) { auto& ts = app.edit->tempoSequence; auto p = app.edit->getTransport().getPosition();
-                                    auto bar = ts.toBarsAndBeats (p).bars; t->insertMIDIClip ("MIDI", { ts.toTime (te::tempo::BarsAndBeats { bar, {} }), ts.toTime (te::tempo::BarsAndBeats { bar + 1, {} }) }, nullptr); lanes.repaint(); } };
-        toolSplit.onClick = [this] { splitSelected(); };
-        toolSnap.onClick = [this] { vs.snap = ! vs.snap; toolSnap.setToggleState (vs.snap, juce::dontSendNotification); };
+        toolSnap.onClick = [this] { vs.snap = ! vs.snap; toolSnap.setToggleState (vs.snap, juce::dontSendNotification); repaint(); };
+        toolBounce.onClick = [this] { bounce(); };
 
         top.playB.onClick  = [this] { togglePlay(); };
         top.stopB.onClick  = [this] { stop(); };
         top.recB.onClick   = [this] { toggleRecord(); };
-        top.startB.onClick = [this] { if (app.edit) app.edit->getTransport().setPosition (0s); };
+        top.startB.onClick = [this] { toStart(); };
         top.rewB.onClick   = [this] { nudge (-1); };
         top.ffB.onClick    = [this] { nudge (1); };
-        top.loopB.onClick  = [this] { if (app.edit) { auto& t = app.edit->getTransport(); ensureLoop(); t.looping = ! t.looping; refreshAll(); } };
+        top.loopB.onClick  = [this] { toggleLoop(); };
         top.clickB.onClick = [this] { if (app.edit) { app.edit->clickTrackEnabled = ! app.edit->clickTrackEnabled; refreshAll(); } };
+        top.onLanguage = [this] (int l) { setLanguage (l); };
+        top.onTogglePanel = [this] (int p) { togglePanel (p); };
 
         lanes.onOpenPianoRoll = [this] (te::MidiClip& c) { openPianoRoll (c); };
         lanes.onSelectionChanged = [this] { inspector.refresh(); headers.repaint(); };
         headers.onSelectionChanged = [this] { inspector.refresh(); lanes.repaint(); };
         mixer.onTrackLevel = [this] (te::EditItemID id, float l) { headers.levels[id] = l; };
         media.onInsertFile = [this] (const juce::File& f) { insertFileAtCursor (f); };
+
+        auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
+        showInsp = pf.getBoolValue ("azShowInsp", true); showMedia = pf.getBoolValue ("azShowMedia", true); showMixer = pf.getBoolValue ("azShowMixer", true);
+        top.setPanels (showInsp, showMedia, showMixer);
 
         vs.addChangeListener (this);
         app.addChangeListener (this);
@@ -57,7 +107,7 @@ public:
         if (! ts.isEmpty()) { vs.selectedTrack = ts[0]->itemID; app.routeMidiTo (ts[0]); }
         app.edit->getTransport().addChangeListener (this);
         mixer.rebuild(); inspector.refresh();
-        zoomToFit();
+        if (lanes.getWidth() > 100) zoomToFit();
         refreshAll();
         if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->setName ("AZ MUS  \xc2\xb7  " + app.editFile.getFileNameWithoutExtension());
     }
@@ -66,15 +116,18 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        top.setBounds (r.removeFromTop (58));
+        top.setBounds (r.removeFromTop (TopBar::menuH + TopBar::barH));
         status.setBounds (r.removeFromBottom (26));
-        mixer.setBounds (r.removeFromBottom (mixerH));
-        inspector.setBounds (r.removeFromLeft (236));
-        media.setBounds (r.removeFromRight (260));
+        mixer.setVisible (showMixer); inspector.setVisible (showInsp); media.setVisible (showMedia);
+        if (showMixer) mixer.setBounds (r.removeFromBottom (juce::jlimit (180, 236, getHeight() * 3 / 10)));
+        if (showInsp) inspector.setBounds (r.removeFromLeft (236));
+        if (showMedia) media.setBounds (r.removeFromRight (260));
         auto hdr = r.removeFromLeft (250);
-        auto tools = hdr.removeFromTop (56);
-        int x = tools.getX() + 10;
-        for (auto* b : { &toolAdd, &toolDraw, &toolSplit, &toolSnap }) { b->setBounds (x, tools.getCentreY() - 13, 28, 26); x += 34; }
+        toolArea = hdr.removeFromTop (56);
+        int x = toolArea.getX() + 8; const int y = toolArea.getCentreY() - 13;
+        toolAdd.setBounds (x, y, 28, 26); x += 34;
+        for (auto* b : tools) { b->setBounds (x, y, 28, 26); x += 30; }
+        x += 4; toolSnap.setBounds (x, y, 28, 26); x += 30; toolBounce.setBounds (x, y, 28, 26);
         headers.setBounds (hdr);
         ruler.setBounds (r.removeFromTop (56));
         lanes.setBounds (r);
@@ -83,21 +136,48 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (bg0);
-        auto r = juce::Rectangle<int> (236, 58, 250, 56);
-        g.setColour (bg2); g.fillRect (r);
-        g.setColour (line); g.drawHorizontalLine (r.getBottom() - 1, (float) r.getX(), (float) r.getRight()); g.drawVerticalLine (r.getRight() - 1, (float) r.getY(), (float) r.getBottom());
-        caps (g, vs.snap ? "SNAP: AVTO" : "SNAP: O'CHIQ", r.toFloat().withTrimmedRight (12), 9, dim2, juce::Justification::centredRight);
+        g.setColour (bg2); g.fillRect (toolArea);
+        g.setColour (line); g.drawHorizontalLine (toolArea.getBottom() - 1, (float) toolArea.getX(), (float) toolArea.getRight());
+        g.drawVerticalLine (toolArea.getRight() - 1, (float) toolArea.getY(), (float) toolArea.getBottom());
     }
+
+    // ---------------------------------------------------------------- panellar va til
+    void togglePanel (int p)
+    {
+        if (p == 0) showInsp = ! showInsp;
+        if (p == 1) showMedia = ! showMedia;
+        if (p == 2) showMixer = ! showMixer;
+        auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
+        pf.setValue ("azShowInsp", showInsp); pf.setValue ("azShowMedia", showMedia); pf.setValue ("azShowMixer", showMixer);
+        top.setPanels (showInsp, showMedia, showMixer);
+        resized(); repaint(); menuItemsChanged();
+    }
+    void setLanguage (int l)
+    {
+        az::setLanguage (l);
+        top.refreshLang(); menuItemsChanged();
+        inspector.refresh();
+        std::function<void (juce::Component&)> rp = [&rp] (juce::Component& c) { c.repaint(); for (auto* ch : c.getChildren()) rp (*ch); };
+        rp (*this);
+        toast (U ("Til: O'zbekcha"));
+    }
+    void setTool (int t)
+    {
+        vs.tool = t;
+        for (int i = 0; i < tools.size(); ++i) tools[i]->setToggleState (i == t, juce::dontSendNotification);
+    }
+    void toast (const juce::String& m) { status.message = m; status.messageTime = juce::Time::getMillisecondCounter(); status.repaint(); }
 
     // ---------------------------------------------------------------- transport
     void togglePlay()
     {
         if (! app.edit) return;
         auto& t = app.edit->getTransport();
-        if (t.isPlaying()) { const bool rec = t.isRecording(); t.stop (false, false); if (rec) app.saveIfPossible(); }
+        if (t.isPlaying()) { const bool rec = t.isRecording(); t.stop (false, false); lanes.recStart.reset(); if (rec) app.saveIfPossible(); }
         else t.play (false);
         refreshAll();
     }
+    void play() { if (app.edit && ! app.edit->getTransport().isPlaying()) app.edit->getTransport().play (false); refreshAll(); }
     void stop()
     {
         if (! app.edit) return;
@@ -108,6 +188,8 @@ public:
         if (rec) app.saveIfPossible();
         refreshAll();
     }
+    void toStart() { if (app.edit) app.edit->getTransport().setPosition (0s); refreshAll(); }
+    void toEnd()   { if (app.edit) app.edit->getTransport().setPosition (te::TimePosition() + app.edit->getLength()); refreshAll(); }
     void toggleRecord()
     {
         if (! app.edit) return;
@@ -122,6 +204,11 @@ public:
             t.record (false);
         }
         refreshAll();
+    }
+    void toggleLoop()
+    {
+        if (! app.edit) return;
+        auto& t = app.edit->getTransport(); ensureLoop(); t.looping = ! t.looping; refreshAll();
     }
     void nudge (int dir)
     {
@@ -139,69 +226,160 @@ public:
             t.setLoopRange ({ ts.toTime (te::tempo::BarsAndBeats { bar, {} }), ts.toTime (te::tempo::BarsAndBeats { bar + 4, {} }) });
         }
     }
-    void splitSelected()
+
+    // ---------------------------------------------------------------- tahrir
+    juce::Array<te::Clip*> selectedClips() { return app.selection.getItemsOfType<te::Clip>(); }
+    void splitAtCursor()
     {
         if (! app.edit) return;
         const auto pos = app.edit->getTransport().getPosition();
-        app.edit->getUndoManager().beginNewTransaction ("Bo'lish");
-        for (auto* c : app.selection.getItemsOfType<te::Clip>())
-            if (c->getEditTimeRange().contains (pos))
-                if (auto* t = dynamic_cast<te::ClipTrack*> (c->getTrack())) t->splitClip (*c, pos);
+        auto list = selectedClips();
+        auto inside = [pos] (te::Clip* c) { return c->getEditTimeRange().getStart() + 0.01s < pos && pos < c->getEditTimeRange().getEnd() - 0.01s; };
+        juce::Array<te::Clip*> todo;
+        for (auto* c : list) if (inside (c)) todo.add (c);
+        if (todo.isEmpty())    // Daftar kabi: tanlov bo'lmasa — kursor ostidagi barcha kliplar
+            for (auto* t : te::getAudioTracks (*app.edit)) for (auto* c : t->getClips()) if (inside (c)) todo.add (c);
+        if (todo.isEmpty()) { toast (U ("Kesish uchun kursorni klip ustiga qo'ying.")); return; }
+        app.edit->getUndoManager().beginNewTransaction (U ("Bo'lish"));
+        for (auto* c : todo) if (auto* t = dynamic_cast<te::ClipTrack*> (c->getTrack())) t->splitClip (*c, pos);
         lanes.repaint();
     }
     void deleteSelected()
     {
         if (! app.edit) return;
         app.edit->getUndoManager().beginNewTransaction (U ("O'chirish"));
-        for (auto* c : app.selection.getItemsOfType<te::Clip>()) c->removeFromParent();
+        for (auto* c : selectedClips()) c->removeFromParent();
         app.selection.deselectAll(); lanes.repaint();
+    }
+    void duplicateSelected() { for (auto* c : selectedClips()) lanes.duplicate (*c); lanes.repaint(); }
+    void selectAll()
+    {
+        if (! app.edit) return;
+        app.selection.deselectAll();
+        int n = 0;
+        for (auto* t : te::getAudioTracks (*app.edit)) for (auto* c : t->getClips()) { app.selection.addToSelection (c); ++n; }
+        toast (U ("Hammasi belgilandi: ") + juce::String (n) + U (" klip")); lanes.repaint();
+    }
+    void bounce()
+    {
+        if (app.edit && app.edit->getTransport().isPlaying()) app.edit->getTransport().stop (false, false);
+        toast (app.bounceSelection (selectedClips()));
+        app.selection.deselectAll(); mixer.rebuild(); refreshAll();
+    }
+    void locators() { toast (app.locatorsToSelection (selectedClips())); refreshAll(); }
+    void zoomH (double f)
+    {
+        const double centre = vs.xToSec ((float) lanes.getWidth() * 0.5f);
+        vs.pxPerSec = juce::jlimit (2.0, 2000.0, vs.pxPerSec * f);
+        vs.startSec = juce::jmax (0.0, centre - lanes.getWidth() * 0.5 / vs.pxPerSec); vs.changed();
+    }
+    void zoomTracks (double f) { vs.trackH = juce::jlimit (36, 220, (int) std::round (vs.trackH * f)); vs.changed(); }
+    void zoomToFit()
+    {
+        if (! app.edit) return;
+        const double len = juce::jmax (30.0, app.edit->getLength().inSeconds() + 6.0);
+        vs.startSec = 0; vs.pxPerSec = juce::jlimit (4.0, 400.0, (double) juce::jmax (600, lanes.getWidth()) / len);
+        vs.changed();
+    }
+    void fitAll()
+    {
+        zoomToFit();
+        const int n = juce::jmax (1, te::getAudioTracks (*app.edit).size());
+        vs.trackH = juce::jlimit (36, 220, (lanes.getHeight() - 10) / n); vs.scrollY = 0; vs.changed();
+        toast (U ("Hamma narsa ekranga sig'dirildi"));
     }
 
     bool keyPressed (const juce::KeyPress& k) override
     {
-        using KP = juce::KeyPress; const auto cmd = juce::ModifierKeys::commandModifier;
-        if (k == KP::spaceKey) { togglePlay(); return true; }
-        if (k == KP::homeKey || k == KP::returnKey) { if (app.edit) app.edit->getTransport().setPosition (0s); return true; }
-        if (k == KP ('r') || k == KP (KP::numberPadMultiply)) { toggleRecord(); return true; }
-        if (k == KP ('l') || k == KP (KP::numberPadDivide)) { top.loopB.triggerClick(); return true; }
-        if (k == KP ('c')) { top.clickB.triggerClick(); return true; }
-        if (k == KP ('g')) { toolSnap.triggerClick(); return true; }
-        if (k == KP::deleteKey || k == KP::backspaceKey) { deleteSelected(); return true; }
-        if (k == KP ('e', cmd, 0)) { splitSelected(); return true; }
-        if (k == KP ('d', cmd, 0)) { for (auto* c : app.selection.getItemsOfType<te::Clip>()) lanes.duplicate (*c); return true; }
-        if (k == KP ('z', cmd, 0)) { if (app.edit) app.edit->getUndoManager().undo(); refreshAll(); return true; }
-        if (k == KP ('z', cmd | juce::ModifierKeys::shiftModifier, 0) || k == KP ('y', cmd, 0)) { if (app.edit) app.edit->getUndoManager().redo(); refreshAll(); return true; }
-        if (k == KP ('s', cmd, 0)) { app.saveIfPossible(); return true; }
-        if (k == KP ('t', cmd, 0)) { showAddTrackMenu(); return true; }
-        if (k == KP (KP::leftKey)) { nudge (-1); return true; }
-        if (k == KP (KP::rightKey)) { nudge (1); return true; }
-        if (k == KP ('+') || k == KP ('=')) { vs.pxPerSec = juce::jmin (2000.0, vs.pxPerSec * 1.25); vs.changed(); return true; }
-        if (k == KP ('-')) { vs.pxPerSec = juce::jmax (2.0, vs.pxPerSec / 1.25); vs.changed(); return true; }
-        if (k == KP ('m', cmd, 0)) { mixerH = mixerH > 0 ? 0 : 236; resized(); return true; }
+        using KP = juce::KeyPress;
+        const auto m = k.getModifiers();
+        const bool ctrl = m.isCommandDown(), shift = m.isShiftDown(), alt = m.isAltDown();
+        const int code = k.getKeyCode();
+        const auto ch = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
+        auto plainKey = [&] (juce_wchar c) { return ! ctrl && ! alt && (code == (int) juce::CharacterFunctions::toUpperCase (c) || ch == c); };
+
+        // F klavishlar (Cubase)
+        if (code == KP::F3Key) { togglePanel (2); return true; }
+        if (code == KP::F4Key) { showAudioSettings(); return true; }
+        if (code == KP::F5Key) { togglePanel (1); return true; }
+        if (alt && ! ctrl && code == 'I') { togglePanel (0); return true; }
+        // Numpad (Cubase)
+        if (code == KP::numberPadMultiply || (! ctrl && k.getTextCharacter() == '*')) { toggleRecord(); return true; }
+        if (code == KP::numberPadDivide   || (! ctrl && k.getTextCharacter() == '/')) { toggleLoop(); return true; }
+        if (code == KP::numberPad0)        { stop(); return true; }
+        if (code == KP::numberPadDecimalPoint || code == KP::numberPadDelete) { toStart(); return true; }
+        if (code == KP::numberPadAdd)      { nudge (1); return true; }
+        if (code == KP::numberPadSubtract) { nudge (-1); return true; }
+        if (code == KP::returnKey && ! ctrl) { play(); return true; }
+        // transport
+        if (code == KP::spaceKey) { togglePlay(); return true; }
+        if (code == KP::homeKey)  { toStart(); return true; }
+        if (code == KP::endKey)   { toEnd(); return true; }
+        if (code == KP::leftKey && ! ctrl)  { nudge (-1); return true; }
+        if (code == KP::rightKey && ! ctrl) { nudge (1); return true; }
+        if (code == KP::escapeKey) { app.selection.deselectAll(); lanes.repaint(); return true; }
+        if (code == KP::deleteKey || code == KP::backspaceKey) { deleteSelected(); return true; }
+        // Ctrl birikmalari
+        if (ctrl && shift && code == 'A') { fitAll(); return true; }
+        if (ctrl && shift && code == 'S') { menuItemSelected (4, 0); return true; }
+        if (ctrl && shift && code == 'E') { exportMix(); return true; }
+        if (ctrl && ! shift && code == 'A') { selectAll(); return true; }
+        if (ctrl && code == 'Z' && ! shift) { if (app.edit) app.edit->getUndoManager().undo(); refreshAll(); return true; }
+        if (ctrl && (code == 'Y' || (code == 'Z' && shift))) { if (app.edit) app.edit->getUndoManager().redo(); refreshAll(); return true; }
+        if (ctrl && code == 'S') { app.saveIfPossible(); toast (U ("Saqlandi")); return true; }
+        if (ctrl && code == 'D') { duplicateSelected(); return true; }
+        if (ctrl && code == 'E') { splitAtCursor(); return true; }
+        if (ctrl && code == 'T') { showAddTrackMenu(); return true; }
+        if (ctrl && code == 'N') { menuItemSelected (1, 0); return true; }
+        if (ctrl && code == 'O') { menuItemSelected (2, 0); return true; }
+        if (ctrl && code == 'I') { menuItemSelected (5, 0); return true; }
+        if (ctrl && code == KP::downKey) { zoomTracks (1.25); return true; }
+        if (ctrl && code == KP::upKey)   { zoomTracks (1 / 1.25); return true; }
+        // bitta harfli (Daftar DAW)
+        if (shift && ! ctrl && code == 'H') { zoomTracks (1.25); return true; }
+        if (shift && ! ctrl && code == 'G') { zoomTracks (1 / 1.25); return true; }
+        if (! shift && plainKey ('b')) { bounce(); return true; }
+        if (! shift && plainKey ('p')) { locators(); return true; }
+        if (! shift && plainKey ('s')) { splitAtCursor(); return true; }
+        if (! shift && plainKey ('r')) { toggleRecord(); return true; }
+        if (! shift && plainKey ('l')) { toggleLoop(); return true; }
+        if (! shift && plainKey ('c')) { top.clickB.triggerClick(); return true; }
+        if (! shift && plainKey ('j')) { toolSnap.triggerClick(); return true; }
+        if (! shift && plainKey ('h')) { zoomH (1.25); return true; }
+        if (! shift && plainKey ('g')) { zoomH (0.8); return true; }
+        if (k.getTextCharacter() == '+' || k.getTextCharacter() == '=') { zoomH (1.25); return true; }
+        if (k.getTextCharacter() == '-') { zoomH (0.8); return true; }
+        if (! ctrl && ! alt && k.getTextCharacter() >= '1' && k.getTextCharacter() <= '4') { setTool (k.getTextCharacter() - '1'); return true; }
         return false;
     }
 
     // ---------------------------------------------------------------- menyular
-    juce::StringArray getMenuBarNames() override { return { "Fayl", "Tahrir", "Loyiha", "Audio", "MIDI", "Mikser", "Plaginlar", "Yordam" }; }
+    juce::StringArray getMenuBarNames() override { return { "Fayl", "Tahrir", "Loyiha", "Audio", "MIDI", "Ko'rinish", "Plaginlar", "Til", "Yordam" }; }
 
     juce::PopupMenu getMenuForIndex (int idx, const juce::String&) override
     {
         juce::PopupMenu m;
-        auto add = [&m] (int id, const char* t, const char* sc = "") { juce::PopupMenu::Item it (U (t)); it.itemID = id; it.shortcutKeyDescription = U (sc); m.addItem (std::move (it)); };
+        auto add = [&m] (int id, const char* t, const char* sc = "", bool ticked = false)
+        { juce::PopupMenu::Item it (U (t)); it.itemID = id; it.shortcutKeyDescription = juce::String::fromUTF8 (sc); it.isTicked = ticked; m.addItem (std::move (it)); };
         switch (idx)
         {
             case 0: add (1, "Yangi loyiha", "Ctrl+N"); add (2, "Ochish...", "Ctrl+O"); m.addSeparator();
-                    add (3, "Saqlash", "Ctrl+S"); add (4, "Boshqa nom bilan saqlash..."); m.addSeparator();
+                    add (3, "Saqlash", "Ctrl+S"); add (4, "Boshqa nom bilan saqlash...", "Ctrl+Shift+S"); m.addSeparator();
                     add (5, "Audio import...", "Ctrl+I"); add (6, "WAV'ga eksport (mixdown)...", "Ctrl+Shift+E"); m.addSeparator(); add (9, "Chiqish"); break;
             case 1: add (10, "Bekor qilish (Undo)", "Ctrl+Z"); add (11, "Qaytarish (Redo)", "Ctrl+Y"); m.addSeparator();
-                    add (12, "Kursor joyida bo'lish", "Ctrl+E"); add (13, "Nusxa", "Ctrl+D"); add (14, "O'chirish", "Del"); break;
-            case 2: add (20, "Audio trek qo'shish", "Ctrl+T"); add (21, "Instrument trek qo'shish"); add (22, "Marker qo'shish (kursor joyida)");
-                    break;
-            case 3: add (30, "Audio sozlamalari (ASIO, drayver, bufer)..."); add (31, "Yozish uchun kirishlarni yangilash"); break;
-            case 4: add (40, "MIDI import...", ""); add (41, "MIDI qurilmalarni qayta skanerlash"); break;
-            case 5: add (50, mixerH > 0 ? "Mikserni yashirish" : "Mikserni ko'rsatish", "Ctrl+M"); break;
-            case 6: add (60, "Plagin qo'shish (tanlangan trekka)..."); add (61, "VST3 plaginlarni skanerlash va boshqarish..."); break;
-            case 7: add (70, "Klaviatura qisqa tugmalari"); add (71, "AZ MUS haqida"); break;
+                    add (12, "Kursor joyida kesish", "S"); add (13, "Nusxa", "Ctrl+D"); add (14, "O'chirish", "Del"); m.addSeparator();
+                    add (15, "Bounce Selection", "B"); add (16, "Locatorlar = tanlov", "P"); add (17, "Hammasini belgilash", "Ctrl+A"); m.addSeparator();
+                    add (18, "Tanlash", "1", vs.tool == 0); add (19, "Qaychi", "2", vs.tool == 1); add (20, "O'chirg'ich", "3", vs.tool == 2); add (21, "Mute", "4", vs.tool == 3); break;
+            case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
+            case 3: add (40, "Audio sozlamalari (ASIO, drayver, bufer)...", "F4"); add (41, "Yozish uchun kirishlarni yangilash"); break;
+            case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
+            case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); m.addSeparator();
+                    add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
+            case 6: add (70, "Plagin qo'shish (tanlangan trekka)..."); add (71, "VST3 plaginlarni skanerlash va boshqarish..."); break;
+            case 7: { juce::PopupMenu::Item a ("O'zbekcha"); a.itemID = 80; a.isTicked = lang == 0; m.addItem (std::move (a));
+                      juce::PopupMenu::Item b (juce::String::fromUTF8 ("Русский")); b.itemID = 81; b.isTicked = lang == 1; m.addItem (std::move (b));
+                      juce::PopupMenu::Item c ("English"); c.itemID = 82; c.isTicked = lang == 2; m.addItem (std::move (c)); break; }
+            case 8: add (90, "Klaviatura qisqa tugmalari"); add (91, "AZ MUS haqida"); break;
         }
         return m;
     }
@@ -212,28 +390,38 @@ public:
         {
             case 1: app.newProject(); break;
             case 2: chooseFile (U ("Loyihani ochish"), "*.azmus;*.tracktionedit", false, [this] (juce::File f) { if (! app.openProject (f)) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "AZ MUS", U ("Loyihani ochib bo'lmadi")); }); break;
-            case 3: app.saveIfPossible(); break;
+            case 3: app.saveIfPossible(); toast (U ("Saqlandi")); break;
             case 4: chooseFile (U ("Boshqa nom bilan saqlash"), "*.azmus", true, [this] (juce::File f) { app.saveAs (f); editChanged(); }); break;
             case 5: chooseFile (U ("Audio import"), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg", false, [this] (juce::File f) { insertFileAtCursor (f); }); break;
             case 6: exportMix(); break;
             case 9: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
             case 10: if (app.edit) app.edit->getUndoManager().undo(); break;
             case 11: if (app.edit) app.edit->getUndoManager().redo(); break;
-            case 12: splitSelected(); break;
-            case 13: for (auto* c : app.selection.getItemsOfType<te::Clip>()) lanes.duplicate (*c); break;
+            case 12: splitAtCursor(); break;
+            case 13: duplicateSelected(); break;
             case 14: deleteSelected(); break;
-            case 20: addTrack (false); break;
-            case 21: addTrack (true); break;
-            case 22: if (app.edit) { auto p = app.edit->getTransport().getPosition(); app.edit->getMarkerManager().createMarker (-1, p, 8s, nullptr); ruler.repaint(); } break;
-            case 30: showAudioSettings(); break;
-            case 31: if (app.edit) app.setupInputs(); inspector.refresh(); break;
-            case 40: chooseFile (U ("MIDI import"), "*.mid;*.midi", false, [this] (juce::File f) { insertFileAtCursor (f); }); break;
-            case 41: app.engine.getDeviceManager().rescanMidiDeviceList(); if (app.edit) app.setupInputs(); break;
-            case 50: mixerH = mixerH > 0 ? 0 : 236; resized(); break;
-            case 60: if (auto* t = inspector.track()) showPluginMenu (app, *t, [this] { inspector.refresh(); mixer.rebuild(); }); break;
-            case 61: showPluginManager(); break;
-            case 70: showShortcuts(); break;
-            case 71: showAbout(); break;
+            case 15: bounce(); break;
+            case 16: locators(); break;
+            case 17: selectAll(); break;
+            case 18: case 19: case 20: case 21: setTool (id - 18); break;
+            case 30: addTrack (false); break;
+            case 31: addTrack (true); break;
+            case 32: if (app.edit) { auto p = app.edit->getTransport().getPosition(); app.edit->getMarkerManager().createMarker (-1, p, 8s, nullptr); ruler.repaint(); } break;
+            case 40: showAudioSettings(); break;
+            case 41: if (app.edit) app.setupInputs(); inspector.refresh(); break;
+            case 50: chooseFile (U ("MIDI import"), "*.mid;*.midi", false, [this] (juce::File f) { insertFileAtCursor (f); }); break;
+            case 51: app.engine.getDeviceManager().rescanMidiDeviceList(); if (app.edit) app.setupInputs(); break;
+            case 60: togglePanel (0); break;
+            case 61: togglePanel (1); break;
+            case 62: togglePanel (2); break;
+            case 63: fitAll(); break;
+            case 64: zoomH (1.25); break;
+            case 65: zoomH (0.8); break;
+            case 70: if (auto* t = inspector.track()) showPluginMenu (app, *t, [this] { inspector.refresh(); mixer.rebuild(); }); break;
+            case 71: showPluginManager(); break;
+            case 80: case 81: case 82: setLanguage (id - 80); break;
+            case 90: showShortcuts(); break;
+            case 91: showAbout(); break;
             default: break;
         }
         refreshAll();
@@ -290,7 +478,7 @@ public:
         {
             const bool ok = app.exportWav (f.withFileExtension ("wav"));
             juce::AlertWindow::showMessageBoxAsync (ok ? juce::MessageBoxIconType::InfoIcon : juce::MessageBoxIconType::WarningIcon, "AZ MUS",
-                                                    ok ? U ("Eksport tayyor:\n") + f.withFileExtension ("wav").getFullPathName() : U ("Eksport qilib bo'lmadi (loyiha bo'sh?)"));
+                                                    ok ? U ("Eksport tayyor:") + "\n" + f.withFileExtension ("wav").getFullPathName() : U ("Eksport qilib bo'lmadi (loyiha bo'sh?)"));
         });
     }
     void chooseFile (const juce::String& title, const juce::String& pattern, bool save, std::function<void (juce::File)> cb)
@@ -302,7 +490,7 @@ public:
     void showAudioSettings()
     {
         juce::DialogWindow::LaunchOptions o;
-        o.dialogTitle = U ("Audio sozlamalari \xc2\xb7 AZ MUS");
+        o.dialogTitle = U ("Audio sozlamalari") + "  \xc2\xb7  AZ MUS";
         o.dialogBackgroundColour = bg1;
         auto* c = new juce::AudioDeviceSelectorComponent (app.engine.getDeviceManager().deviceManager, 0, 64, 2, 64, true, false, true, false);
         c->setSize (560, 520); o.content.setOwned (c); o.useNativeTitleBar = true; o.resizable = true;
@@ -311,7 +499,7 @@ public:
     void showPluginManager()
     {
         juce::DialogWindow::LaunchOptions o;
-        o.dialogTitle = U ("Plaginlar menejeri \xc2\xb7 AZ MUS");
+        o.dialogTitle = U ("Plaginlar menejeri") + "  \xc2\xb7  AZ MUS";
         o.dialogBackgroundColour = bg1;
         auto& pm = app.engine.getPluginManager();
         auto* v = new juce::PluginListComponent (pm.pluginFormatManager, pm.knownPluginList,
@@ -322,25 +510,33 @@ public:
     }
     void showShortcuts()
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, U ("Qisqa tugmalar"), U (
-            "Space \xe2\x80\x94 ijro / to'xtatish\nR yoki * \xe2\x80\x94 yozish\nL \xe2\x80\x94 loop\nC \xe2\x80\x94 metronom\nHome / Enter \xe2\x80\x94 boshiga\n"
-            "\xe2\x86\x90 \xe2\x86\x92 \xe2\x80\x94 bir takt\nG \xe2\x80\x94 snap\nCtrl+E \xe2\x80\x94 bo'lish\nCtrl+D \xe2\x80\x94 nusxa\nDel \xe2\x80\x94 o'chirish\n"
-            "Ctrl+Z / Ctrl+Y \xe2\x80\x94 undo / redo\nCtrl+S \xe2\x80\x94 saqlash\nCtrl+T \xe2\x80\x94 trek qo'shish\nCtrl+M \xe2\x80\x94 mikser\n"
-            "+ / - yoki Ctrl+g'ildirak \xe2\x80\x94 zoom\nChizg'ichni sudrash \xe2\x80\x94 loop zonasi\nChizg'ichga 2x \xe2\x80\x94 marker (bo'lim)\n"
-            "Bo'sh joyga 2x \xe2\x80\x94 MIDI klip + piano roll\nKlip chetini sudrash \xe2\x80\x94 uzunlik\n\nPiano roll: 1-4 grid, Q kvantlash, o'ng tugma o'chirish"));
+        struct List : juce::Component
+        {
+            List() { setSize (560, 24 + (int) std::size (keyHelp) * 24); }
+            void paint (juce::Graphics& g) override
+            {
+                g.fillAll (bg1);
+                for (int i = 0; i < (int) std::size (keyHelp); ++i)
+                {
+                    const float y = 12.0f + (float) i * 24;
+                    if (i % 2 == 0) { g.setColour (juce::Colours::white.withAlpha (0.025f)); g.fillRect (8.0f, y, (float) getWidth() - 16, 24.0f); }
+                    label (g, juce::String::fromUTF8 (keyHelp[i].key), { 18, y, 170, 24 }, 12, redSoft, juce::Justification::centredLeft, 600);
+                    label (g, U (keyHelp[i].what), { 196, y, (float) getWidth() - 210, 24 }, 12, text, juce::Justification::centredLeft, 400);
+                }
+            }
+        };
+        juce::DialogWindow::LaunchOptions o;
+        o.dialogTitle = U ("Klaviatura qisqa tugmalari") + "  \xc2\xb7  AZ MUS";
+        o.dialogBackgroundColour = bg1; o.useNativeTitleBar = true;
+        auto* vp = new juce::Viewport(); vp->setViewedComponent (new List(), true); vp->setSize (580, 640);
+        o.content.setOwned (vp); o.launchAsync();
     }
     void showAbout()
     {
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "AZ MUS " + juce::String (JUCE_APPLICATION_VERSION_STRING), U (
-            "Digital Audio Workstation\nAzimxodjayev Music \xc2\xb7 Alif Records\n\n"
-            "Powered by Tracktion Engine (Personal licence)\nJUCE \xc2\xb7 Airwindows (MIT)\n\n\xc2\xa9 2026 Azimxodjayev Music"));
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "AZ MUS " + juce::String (JUCE_APPLICATION_VERSION_STRING),
+            "Digital Audio Workstation\nAzimxodjayev Music \xc2\xb7 Alif Records\n\nPowered by Tracktion Engine (Personal licence)\nJUCE \xc2\xb7 Airwindows (MIT)\n\n\xc2\xa9 2026 Azimxodjayev Music");
     }
 
-    void zoomToFit()
-    {
-        const double len = juce::jmax (30.0, app.edit->getLength().inSeconds() + 6.0);
-        vs.startSec = 0; vs.pxPerSec = juce::jlimit (4.0, 400.0, (double) juce::jmax (600, lanes.getWidth()) / len); vs.changed();
-    }
     void refreshAll() { top.refreshState(); ruler.repaint(); lanes.repaint(); headers.repaint(); status.repaint(); }
 
 private:
@@ -354,7 +550,6 @@ private:
         if (! app.edit) return;
         auto& t = app.edit->getTransport();
         const double pos = t.getPosition().inSeconds();
-        // kursor sahifadan chiqsa — avtomatik siljitish
         if (t.isPlaying())
         {
             const double right = vs.xToSec ((float) lanes.getWidth());
@@ -376,9 +571,12 @@ private:
     AppEngine& app;
     ViewState vs;
     TopBar top; Inspector inspector; TimeRuler ruler; TrackHeaders headers; Lanes lanes; Mixer mixer; MediaBrowser media; StatusBar status;
-    juce::TextButton toolAdd, toolDraw, toolSplit, toolSnap;
+    juce::TextButton toolAdd, toolSnap, toolBounce;
+    juce::OwnedArray<juce::TextButton> tools;
+    juce::Rectangle<int> toolArea;
     std::unique_ptr<PianoRollWindow> pianoRoll;
     std::unique_ptr<juce::FileChooser> chooser;
-    int mixerH = 236, recTick = 0, slow = 0; double lastPos = -1; bool fitted = false;
+    bool showInsp = true, showMedia = true, showMixer = true, fitted = false;
+    int recTick = 0, slow = 0; double lastPos = -1;
 };
 }

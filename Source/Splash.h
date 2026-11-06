@@ -74,7 +74,7 @@ public:
         {
             auto r = Rectangle<float> (W - 360, 70.0f + (float) i * 22, 304, 20);
             const Colour c = i < step ? dim : i == step ? redSoft : Colour (0xff4e494b);
-            caps (g, steps[i] + (i < step ? U ("  \xe2\x9c\x93") : String()), r, 10.5f, c, Justification::centredRight);
+            caps (g, tr (steps[i]) + (i < step ? U ("  \xe2\x9c\x93") : String()), r, 10.5f, c, Justification::centredRight);
         }
 
         // holat va progress

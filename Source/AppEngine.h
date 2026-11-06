@@ -325,6 +325,69 @@ public:
         return clip;
     }
 
+    // ---------------------------------------------------------------- Bounce Selection (B)
+    // Audio kliplar: bitta audioga birlashtiriladi (klip ovozi/fade qo'llanadi, trek Fx trekda qoladi)
+    // MIDI kliplar: instrument + Fx bilan audioga aylantiriladi va yangi trekka qo'yiladi (asl klip mute)
+    juce::String bounceSelection (const juce::Array<te::Clip*>& clips)
+    {
+        if (edit == nullptr || clips.isEmpty()) return U ("Avval klip(lar)ni tanlang (Bounce Selection \xe2\x80\x94 B).");
+        std::map<te::AudioTrack*, juce::Array<te::Clip*>> byTrack;
+        for (auto* c : clips) if (auto* t = dynamic_cast<te::AudioTrack*> (c->getTrack())) byTrack[t].add (c);
+        auto dir = editFile.getParentDirectory().getChildFile ("Audio"); dir.createDirectory();
+        auto& dm = engine.getDeviceManager();
+        int made = 0, nClips = 0;
+        edit->getUndoManager().beginNewTransaction ("Bounce");
+        for (auto& [t, cl] : byTrack)
+        {
+            auto a = cl[0]->getPosition().getStart(), b = cl[0]->getPosition().getEnd();
+            bool midi = false;
+            for (auto* c : cl) { a = juce::jmin (a, c->getPosition().getStart()); b = juce::jmax (b, c->getPosition().getEnd()); midi |= dynamic_cast<te::MidiClip*> (c) != nullptr; }
+            if (midi) b = b + 1.5s;                                       // synth "release" dumi
+            const auto name = (cl.size() == 1 ? cl[0]->getName() : t->getName()) + " (bounce)";
+            const auto file = dir.getNonexistentChildFile (juce::File::createLegalFileName (name), ".wav");
+            te::Renderer::Parameters r (*edit);
+            r.destFile = file; r.audioFormat = engine.getAudioFileFormatManager().getWavFormat(); r.bitDepth = 24;
+            r.sampleRateForAudio = dm.getSampleRate() > 7000 ? dm.getSampleRate() : 48000.0;
+            r.blockSizeForAudio  = dm.getBlockSize() > 0 ? dm.getBlockSize() : 512;
+            r.time = { a, b };
+            juce::BigInteger bits; bits.setBit (te::getAllTracks (*edit).indexOf (t)); r.tracksToDo = bits;
+            r.allowedClips = cl;
+            r.usePlugins = midi; r.useMasterPlugins = false;
+            te::Renderer::renderToFile ("Bounce", r);
+            if (! file.existsAsFile()) continue;
+            te::AudioFile af (engine, file);
+            const auto len = te::TimeDuration::fromSeconds (af.getLength());
+            if (midi)
+            {
+                auto nt = edit->insertNewAudioTrack (te::TrackInsertPoint (nullptr, t), nullptr);
+                if (nt == nullptr) continue;
+                nt->setName (name); nt->setColour (t->getColour());
+                nt->insertWaveClip (name, file, { { a, a + len }, {} }, false);
+                for (auto* c : cl) c->setMuted (true);
+            }
+            else
+            {
+                for (auto* c : cl) c->removeFromParent();
+                t->insertWaveClip (name, file, { { a, a + len }, {} }, false);
+            }
+            ++made; nClips += cl.size();
+        }
+        if (made == 0) return U ("Bounce xatosi: render bajarilmadi");
+        return U ("Bounce: ") + juce::String (made) + U (" trek \xe2\x80\x94 ") + juce::String (nClips) + U (" klip bitta audioga birlashtirildi. Ctrl+Z \xe2\x80\x94 qaytarish.");
+    }
+
+    // P: loop (locator) chegaralari = tanlangan kliplar
+    juce::String locatorsToSelection (const juce::Array<te::Clip*>& clips)
+    {
+        if (edit == nullptr || clips.isEmpty()) return U ("Avval klipni tanlang \xe2\x80\x94 loop chegaralari shu klipga qo'yiladi.");
+        auto a = clips[0]->getPosition().getStart(), b = clips[0]->getPosition().getEnd();
+        for (auto* c : clips) { a = juce::jmin (a, c->getPosition().getStart()); b = juce::jmax (b, c->getPosition().getEnd()); }
+        edit->getTransport().setLoopRange ({ a, b }); edit->getTransport().looping = true;
+        auto& ts = edit->tempoSequence;
+        auto bb = [&ts] (te::TimePosition p) { auto x = ts.toBarsAndBeats (p); return juce::String (x.bars + 1) + "." + juce::String (x.getWholeBeats() + 1); };
+        return U ("Locatorlar tanlovga o'rnatildi: ") + bb (a) + U (" \xe2\x86\x92 ") + bb (b);
+    }
+
     // ---------------------------------------------------------------- kirishlar (yozish)
     void setupInputs()
     {

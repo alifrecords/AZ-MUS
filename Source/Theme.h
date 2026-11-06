@@ -3,6 +3,7 @@
 // =============================================================================
 #pragma once
 #include <JuceHeader.h>
+#include "Lang.h"
 
 namespace te = tracktion;
 using namespace std::literals;
@@ -36,7 +37,7 @@ namespace az
     inline void label (juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r, float h, juce::Colour c,
                        juce::Justification j = juce::Justification::centredLeft, int w = 500, float kern = 0.0f)
     {
-        g.setColour (c); g.setFont (font (h, w, kern)); g.drawText (s, r, j, true);
+        g.setColour (c); g.setFont (font (h, w, kern)); g.drawText (tr (s), r, j, true);
     }
     inline void caps (juce::Graphics& g, const juce::String& s, juce::Rectangle<float> r, float h = 9.0f, juce::Colour c = dim2,
                       juce::Justification j = juce::Justification::centredLeft)
@@ -44,7 +45,7 @@ namespace az
         label (g, s, r, h, c, j, 500, 0.22f);
     }
 
-    inline juce::String U (const char* s) { return juce::String::fromUTF8 (s); }
+    inline juce::String U (const char* s) { return tr (juce::String::fromUTF8 (s)); }
 
     inline void panel (juce::Graphics& g, juce::Rectangle<float> r, float rad = 8.0f, float fillA = 0.025f, float strokeA = 0.07f)
     {
@@ -123,9 +124,9 @@ namespace az
         void drawMenuBarItem (juce::Graphics& g, int w, int h, int, const juce::String& t, bool over, bool open, bool, juce::MenuBarComponent&) override
         {
             if (over || open) { g.setColour (juce::Colours::white.withAlpha (0.06f)); g.fillRoundedRectangle (1, 4, (float) w - 2, (float) h - 8, 6); }
-            label (g, t, { 0, 0, (float) w, (float) h }, 13.0f, (over || open) ? juce::Colours::white : juce::Colour (0xffa49c9e), juce::Justification::centred, 400);
+            label (g, tr (t), { 0, 0, (float) w, (float) h }, 13.0f, (over || open) ? juce::Colours::white : juce::Colour (0xffa49c9e), juce::Justification::centred, 400);
         }
-        int getMenuBarItemWidth (juce::MenuBarComponent&, int, const juce::String& t) override { return (int) textWidth (font (13.0f), t) + 18; }
+        int getMenuBarItemWidth (juce::MenuBarComponent&, int, const juce::String& t) override { return (int) textWidth (font (13.0f), tr (t)) + 18; }
 
         void drawPopupMenuBackground (juce::Graphics& g, int w, int h) override
         {
@@ -192,7 +193,7 @@ namespace az
             if (! b.isEnabled()) c = c.withAlpha (0.35f);
             const auto t = b.getButtonText();
             if (auto icon = drawIcon (g, t, b.getLocalBounds().toFloat(), c)) return;
-            label (g, t, b.getLocalBounds().toFloat(), jmin (12.5f, (float) b.getHeight() * 0.48f), c, Justification::centred, 600);
+            label (g, tr (t), b.getLocalBounds().toFloat(), jmin (12.5f, (float) b.getHeight() * 0.48f), c, Justification::centred, 600);
         }
 
         // Transport va asboblar uchun vektor ikonkalar
@@ -233,6 +234,15 @@ namespace az
             else if (t == "#scissors") { fill = false; p.addEllipse (cx - s, cy + s * 0.2f, s * 0.7f, s * 0.7f); p.addEllipse (cx + s * 0.3f, cy + s * 0.2f, s * 0.7f, s * 0.7f); p.startNewSubPath (cx - s * 0.5f, cy + s * 0.3f); p.lineTo (cx + s * 0.6f, cy - s); p.startNewSubPath (cx + s * 0.5f, cy + s * 0.3f); p.lineTo (cx - s * 0.6f, cy - s); }
             else if (t == "#grid") { fill = false; for (int i = -1; i <= 1; i += 2) { p.startNewSubPath (cx + i * s * 0.45f, cy - s); p.lineTo (cx + i * s * 0.45f, cy + s); p.startNewSubPath (cx - s, cy + i * s * 0.45f); p.lineTo (cx + s, cy + i * s * 0.45f); } }
             else if (t == "#gear") { fill = false; p.addEllipse (cx - s * 0.45f, cy - s * 0.45f, s * 0.9f, s * 0.9f); for (int i = 0; i < 8; ++i) { const float a = (float) i * MathConstants<float>::pi / 4; p.startNewSubPath (cx + std::cos (a) * s * 0.75f, cy + std::sin (a) * s * 0.75f); p.lineTo (cx + std::cos (a) * s * 1.1f, cy + std::sin (a) * s * 1.1f); } }
+            else if (t == "#pinsp")  { fill = false; p.addRoundedRectangle (cx - s * 1.1f, cy - s, s * 2.2f, s * 2.0f, 2.0f); p.startNewSubPath (cx - s * 0.35f, cy - s); p.lineTo (cx - s * 0.35f, cy + s); }
+            else if (t == "#pmedia") { fill = false; p.addRoundedRectangle (cx - s * 1.1f, cy - s, s * 2.2f, s * 2.0f, 2.0f); p.startNewSubPath (cx + s * 0.35f, cy - s); p.lineTo (cx + s * 0.35f, cy + s); }
+            else if (t == "#pmix")   { fill = false; for (int i = -1; i <= 1; ++i) { p.startNewSubPath (cx + i * s * 0.75f, cy - s); p.lineTo (cx + i * s * 0.75f, cy + s); p.addRectangle (cx + i * s * 0.75f - s * 0.28f, cy + (i == 0 ? -s * 0.5f : i < 0 ? s * 0.2f : -s * 0.1f), s * 0.56f, s * 0.3f); } }
+            else if (t == "#arrow")  { p.startNewSubPath (cx - s * 0.6f, cy - s); p.lineTo (cx - s * 0.6f, cy + s * 0.75f); p.lineTo (cx - s * 0.15f, cy + s * 0.3f); p.lineTo (cx + s * 0.25f, cy + s * 1.1f); p.lineTo (cx + s * 0.5f, cy + s * 0.95f); p.lineTo (cx + s * 0.1f, cy + s * 0.2f); p.lineTo (cx + s * 0.75f, cy + s * 0.2f); p.closeSubPath(); }
+            else if (t == "#eraser") { fill = false; Path q; q.addRoundedRectangle (cx - s, cy - s * 0.45f, s * 2.0f, s * 0.9f, 2.0f); q.applyTransform (AffineTransform::rotation (-0.6f, cx, cy)); p.addPath (q); p.startNewSubPath (cx - s * 1.1f, cy + s * 1.1f); p.lineTo (cx + s * 0.4f, cy + s * 1.1f); }
+            else if (t == "#mute")   { p.addRectangle (cx - s * 1.1f, cy - s * 0.4f, s * 0.6f, s * 0.8f); p.addTriangle (cx - s * 0.5f, cy - s * 0.4f, cx + s * 0.1f, cy - s, cx + s * 0.1f, cy + s); p.addTriangle (cx - s * 0.5f, cy + s * 0.4f, cx + s * 0.1f, cy - s, cx + s * 0.1f, cy + s);
+                                        Path x; x.startNewSubPath (cx + s * 0.45f, cy - s * 0.45f); x.lineTo (cx + s * 1.15f, cy + s * 0.45f); x.startNewSubPath (cx + s * 1.15f, cy - s * 0.45f); x.lineTo (cx + s * 0.45f, cy + s * 0.45f);
+                                        g.setColour (c); g.strokePath (x, PathStrokeType (1.5f)); }
+            else if (t == "#bounce") { fill = false; p.startNewSubPath (cx, cy - s); p.lineTo (cx, cy + s * 0.5f); p.startNewSubPath (cx - s * 0.6f, cy - s * 0.1f); p.lineTo (cx, cy + s * 0.5f); p.lineTo (cx + s * 0.6f, cy - s * 0.1f); p.startNewSubPath (cx - s, cy + s); p.lineTo (cx + s, cy + s); }
             else return false;
             g.setColour (c);
             if (fill) g.fillPath (p); else g.strokePath (p, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));

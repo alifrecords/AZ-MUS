@@ -13,6 +13,7 @@ struct ViewState : public juce::ChangeBroadcaster
     int trackH = 72, scrollY = 0;
     te::EditItemID selectedTrack;
     bool snap = true;
+    int tool = 0;     // 0 tanlash, 1 qaychi, 2 o'chirg'ich, 3 mute
 
     float secToX (double s) const { return (float) ((s - startSec) * pxPerSec); }
     double xToSec (float x) const { return startSec + (double) x / pxPerSec; }
@@ -290,6 +291,18 @@ public:
         auto* t = trackAtY (e.y);
         if (t) { vs.selectedTrack = t->itemID; app.routeMidiTo (t); }
         drag = {};
+        if (auto* c = clipAt (e.position); c != nullptr && vs.tool != 0 && ! e.mods.isPopupMenu())
+        {
+            te::Clip::Ptr cp (c);
+            if (vs.tool == 1)
+            {
+                app.edit->getUndoManager().beginNewTransaction (U ("Bo'lish"));
+                if (auto* ct = dynamic_cast<te::ClipTrack*> (c->getTrack())) ct->splitClip (*c, snapTime (*app.edit, vs.xToSec (e.position.x), vs));
+            }
+            if (vs.tool == 2) { app.edit->getUndoManager().beginNewTransaction (U ("O'chirish")); app.selection.deselectAll(); c->removeFromParent(); }
+            if (vs.tool == 3) { app.edit->getUndoManager().beginNewTransaction ("Mute"); c->setMuted (! c->isMuted()); }
+            repaint(); return;
+        }
         if (auto* c = clipAt (e.position))
         {
             if (e.mods.isShiftDown() || e.mods.isCommandDown()) app.selection.addToSelection (c);
@@ -331,6 +344,7 @@ public:
     void mouseMove (const juce::MouseEvent& e) override
     {
         auto* c = clipAt (e.position);
+        if (vs.tool != 0) { setMouseCursor (c ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); return; }
         setMouseCursor (c && e.position.x > clipRect (*c).getRight() - 6 ? juce::MouseCursor::LeftRightResizeCursor
                                                                          : c ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
     }

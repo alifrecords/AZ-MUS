@@ -144,6 +144,8 @@ public:
         args.trim(); args.removeEmptyStrings();
         for (auto& a : args) a = a.unquoted();
         juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
+        az::loadLanguage();
+        if (args.contains ("--lang")) az::lang = args[args.indexOf ("--lang") + 1].getIntValue();
 
         if (args.contains ("--scan-plugin"))
         {
@@ -230,6 +232,12 @@ private:
                     app->newProject();
                 if (args.contains ("--demo")) makeDemo (*app);
                 mainWindow = std::make_unique<MainWindow> (*app);
+                if (args.contains ("--size"))   // test: oyna o'lchami (masalan 1366x768)
+                {
+                    auto sz = args[args.indexOf ("--size") + 1];
+                    mainWindow->setFullScreen (false);
+                    mainWindow->setBounds (0, 0, sz.upToFirstOccurrenceOf ("x", false, false).getIntValue(), sz.fromFirstOccurrenceOf ("x", false, false).getIntValue());
+                }
                 stage = 5; startTimer (500); break;
             }
             case 5:

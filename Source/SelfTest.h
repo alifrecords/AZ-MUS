@@ -189,6 +189,52 @@ inline int runSelfTest (const juce::StringArray& args)
     check (clips2 == clips && plugs2 == plugs, "Qayta ochilgan loyiha bir xil (kliplar " + juce::String (clips2) + ", plaginlar " + juce::String (plugs2) + ")");
     check (std::abs (app2->edit->tempoSequence.getTempo (0)->getBpm() - 96.0) < 0.01, "Temp saqlangan: 96 BPM");
 
+    // Bounce (B): AZ Drum trekidagi 2 ta klip -> 1 ta audio
+    {
+        auto ts2 = te::getAudioTracks (*app2->edit);
+        te::AudioTrack* drum = nullptr; te::AudioTrack* pad = nullptr;
+        for (auto* t : ts2) { if (t->getName() == "AZ Drum") drum = t; if (t->getName().startsWith ("Pad")) pad = t; }
+        if (drum != nullptr && drum->getClips().size() >= 2)
+        {
+            const int before2 = drum->getClips().size();
+            juce::Array<te::Clip*> sel { drum->getClips()[0], drum->getClips()[1] };
+            const auto expectEnd = sel[1]->getPosition().getEnd();
+            const auto msg = app2->bounceSelection (sel);
+            std::printf ("       %s\n", msg.toRawUTF8());
+            bool lenOk = false;
+            for (auto* c : drum->getClips()) if (c->getName().contains ("bounce")) lenOk = std::abs ((c->getPosition().getEnd() - expectEnd).inSeconds()) < 0.05;
+            check (drum->getClips().size() == before2 - 1 && lenOk, "Bounce (audio): 2 klip -> 1 audio, uzunlik to'g'ri");
+            app2->edit->getUndoManager().undo();
+            check (drum->getClips().size() == before2, "Bounce Ctrl+Z bilan qaytarildi");
+        }
+        else check (false, "Bounce: AZ Drum trek topilmadi");
+        if (pad != nullptr && pad->getClips().size() > 0)
+        {
+            const int nTracks = te::getAudioTracks (*app2->edit).size();
+            juce::Array<te::Clip*> sel { pad->getClips()[0] };
+            app2->bounceSelection (sel);
+            const auto ts3 = te::getAudioTracks (*app2->edit);
+            bool newTrackOk = ts3.size() == nTracks + 1 && ts3[ts3.indexOf (pad) + 1]->getClips().size() == 1;
+            check (newTrackOk && pad->getClips()[0]->isMuted(), "Bounce (MIDI): synth audioga aylandi, yangi trek, asl klip mute");
+            app2->edit->getUndoManager().undo();
+        }
+        // P: locatorlar
+        if (drum != nullptr)
+        {
+            juce::Array<te::Clip*> sel { drum->getClips()[1] };
+            app2->locatorsToSelection (sel);
+            const auto lr = app2->edit->getTransport().getLoopRange();
+            check (lr.getStart() == sel[0]->getPosition().getStart() && lr.getEnd() == sel[0]->getPosition().getEnd() && app2->edit->getTransport().looping,
+                   "Locatorlar (P) = tanlangan klip");
+        }
+        // tillar
+        const int keep = az::lang;
+        az::lang = 1; const bool ru = az::tr ("Saqlash") == juce::String::fromUTF8 ("Сохранить");
+        az::lang = 2; const bool en = az::tr ("Saqlash") == "Save";
+        az::lang = keep;
+        check (ru && en, "Tarjima: Saqlash -> Сохранить / Save");
+    }
+
     // render (mixdown)
     const auto out = dir.getChildFile ("mixdown.wav");
     std::printf ("       render...\n"); std::fflush (stdout);

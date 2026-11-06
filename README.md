@@ -6,6 +6,23 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.2.0: Daftar DAW klavishlari, 3 til, yopiladigan panellar
+| Klavish | Vazifa |
+|---|---|
+| Space / Enter (Num) | Ijro (to'xtatish) |
+| R / Num * | Yozish (Cubase kabi) |
+| Num 0 / Num . / Num + − / Num / | Stop / boshiga / takt oldinga-orqaga / loop |
+| B | Bounce Selection: audio kliplar bitta audioga; MIDI esa synth bilan audioga (yangi trek) |
+| P | Locatorlar (loop) = tanlangan kliplar |
+| S / Ctrl+E | Kursor joyida kesish |
+| 1 2 3 4 | Asbob: tanlash / qaychi / o'chirg'ich / mute |
+| H / G, Shift+H / G | Gorizontal zoom, trek balandligi |
+| Ctrl+Shift+A, Ctrl+A, Esc | Hammasini ekranga sig'dirish, hammasini belgilash, bekor qilish |
+| F3 / F4 / F5 / Alt+I | Mikser / Audio sozlamalari / Media brauzer / Inspektor |
+| J | Snap |
+
+Panellar (Inspektor, Media brauzer, Mikser) yopiladi va ochiladi; holati saqlanadi. Til: logotip yonidagi **UZ · RU · EN** yoki **Til** menyusi. Tuzatildi: har bir trek indikatori faqat o'z signalini ko'rsatadi.
+
 ## Versiya 0.1.0: imkoniyatlar
 
 | Bo'lim | Nima bor |
