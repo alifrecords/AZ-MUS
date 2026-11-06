@@ -586,7 +586,7 @@ inline int runSelfTest (const juce::StringArray& args)
         }
         auto on = az::detectTransients (a9->engine, hf);
         std::printf ("       zarbalar:"); for (double o : on) std::printf (" %.4f", o); std::printf ("\n");
-        check (on.size() == 3 && std::abs (on[0] - 0.5) < 0.004 && std::abs (on[1] - 1.25) < 0.004 && std::abs (on[2] - 2.0) < 0.004, "Zarba (transient) boshlanishlari aniq topildi (\xc2\xb14 ms)");
+        check (on.size() == 3 && std::abs (on[0] - 0.5) < 0.004 && std::abs (on[1] - 1.25) < 0.004 && std::abs (on[2] - 2.0) < 0.004, "Zarba (transient) boshlanishlari aniq topildi (\xc2\xb1" "4 ms)");
         auto clip = tA->insertWaveClip ("hits", hf, { te::TimeRange (te::TimePosition::fromSeconds (1.0), te::TimePosition::fromSeconds (4.0)), {} }, false);
 
         auto mc9 = std::make_unique<az::MainComponent> (*a9); mc9->setSize (1600, 900);
