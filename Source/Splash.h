@@ -11,7 +11,7 @@ class SplashComponent : public juce::Component, private juce::Timer
 public:
     juce::StringArray steps { "AUDIO DRAYVER", "MIDI QURILMALAR", "VST3 PLAGINLAR", "SAMPLE KUTUBXONA", "LOYIHA OYNASI" };
 
-    SplashComponent() { setSize (900, 520); setOpaque (false); startTimerHz (30); }
+    SplashComponent() { setSize (900, 520); setOpaque (false); startTimerHz (30); setInterceptsMouseClicks (false, false); }
 
     void setStep (int s, const juce::String& status, float prog)
     {
@@ -84,6 +84,7 @@ public:
             const float sw = textWidth (font (11.5f), statusText) + 10;
             label (g, detail, { 56 + sw, H - 92, 600 - sw, 16 }, 11.5f, redSoft, Justification::centredLeft, 400);
         }
+        if (step == 2) caps (g, U ("BOSING \xe2\x80\x94 O'TKAZIB YUBORISH"), { W - 360, H - 92, 220, 16 }, 9.5f, Colour (0xff7d7678), Justification::centredRight);
         label (g, juce::String (roundToInt (shown * 100)) + "%", { W - 156, H - 92, 100, 16 }, 11.5f, Colour (0xffa49c9e), Justification::centredRight);
         auto bar = Rectangle<float> (56, H - 70, W - 112, 3);
         g.setColour (Colours::white.withAlpha (0.07f)); g.fillRoundedRectangle (bar, 1.5f);
@@ -103,6 +104,8 @@ private:
 class SplashWindow : public juce::Component
 {
 public:
+    std::atomic<bool> skipRequested { false };
+    void mouseDown (const juce::MouseEvent&) override { skipRequested = true; }
     SplashWindow()
     {
         addAndMakeVisible (content);

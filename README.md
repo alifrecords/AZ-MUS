@@ -3,6 +3,9 @@
 
 ![AZ MUS](docs/screenshot.png)
 
+## 0.1.1: xavfsiz plagin skaneri
+Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
+
 ## Versiya 0.1.0: imkoniyatlar
 
 | Bo'lim | Nima bor |
