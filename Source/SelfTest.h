@@ -235,6 +235,58 @@ inline int runSelfTest (const juce::StringArray& args)
         check (ru && en, "Tarjima: Saqlash -> Сохранить / Save");
     }
 
+    // FX kanal + send, Control Room (eksportga ta'sir qilmasligi)
+    {
+        az::Routing rt (*app2);
+        auto* fx = rt.addFxChannel ("Reverb", "reverb", {});
+        te::AudioTrack* vox = nullptr;
+        for (auto* t : te::getAudioTracks (*app2->edit)) if (t->getName() == "Lead Vocal") vox = t;
+        auto* snd = (fx && vox) ? rt.addSend (*vox, az::Routing::fxBus (*fx), -6.0f) : nullptr;
+        check (fx != nullptr && snd != nullptr && rt.fxTracks().size() == 1 && std::abs (snd->getGainDb() + 6.0f) < 0.1f, "FX kanal (Reverb) + Lead Vocal'dan send -6 dB");
+        if (auto* cr = rt.controlRoom()) { cr->mute = true; cr->level = -30.0f; }
+        check (rt.controlRoom() != nullptr, "Control Room master oxirida");
+    }
+    // Delete tugmasi (Windows'da Num Del bilan bir xil kod) haqiqatan o'chiradi
+    {
+        auto mc = std::make_unique<az::MainComponent> (*app2);
+        mc->setBounds (0, 0, 1600, 900);
+        te::AudioTrack* drum = nullptr;
+        for (auto* t : te::getAudioTracks (*app2->edit)) if (t->getName() == "AZ Drum") drum = t;
+        if (drum != nullptr)
+        {
+            const int n0 = drum->getClips().size();
+            app2->selection.selectOnly (drum->getClips().getLast());
+            mc->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey));
+            check (drum->getClips().size() == n0 - 1, "Delete tugmasi tanlangan klipni o'chiradi");
+            app2->edit->getUndoManager().undo();
+            check (drum->getClips().size() == n0, "Ctrl+Z o'chirilgan klipni qaytaradi");
+
+            // sichqoncha hodisalari (haqiqiy MouseEvent)
+            auto& ln = mc->getLanes();
+            auto src = juce::Desktop::getInstance().getMainMouseSource();
+            auto ev = [&] (juce::Point<float> p, juce::Point<float> down, juce::ModifierKeys m, bool dragged)
+            { return juce::MouseEvent (src, p, m, 0, 0, 0, 0, 0, &ln, &ln, juce::Time::getCurrentTime(), down, juce::Time::getCurrentTime(), 1, dragged); };
+            const auto lm = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+            // to'rtburchak: birinchi 3 ta baraban klipini qamrab olish
+            auto r0 = ln.clipRect (*drum->getClips()[0]), r2 = ln.clipRect (*drum->getClips()[2]);
+            const juce::Point<float> a (r0.getX() + 2, r0.getY() - 2), b (r2.getCentreX(), r2.getBottom() - 4);
+            ln.mouseDown (ev (a, a, lm, false)); ln.mouseDrag (ev (b, a, lm, true)); ln.mouseUp (ev (b, a, juce::ModifierKeys(), true));
+            check (app2->selection.getItemsOfType<te::Clip>().size() == 3, "Sichqoncha bilan to'rtburchak: 3 ta klip belgilandi (" + juce::String (app2->selection.getItemsOfType<te::Clip>().size()) + ")");
+            // Alt + sudrash = nusxa
+            app2->selection.deselectAll();
+            const int before = drum->getClips().size();
+            auto* last = drum->getClips().getLast();
+            const auto origStart = last->getPosition().getStart();
+            auto rc = ln.clipRect (*last);
+            const juce::Point<float> c1 (rc.getCentreX(), rc.getCentreY()), c2 (rc.getCentreX() + rc.getWidth() + 2, rc.getCentreY());
+            const auto alt = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+            ln.mouseDown (ev (c1, c1, alt, false)); ln.mouseDrag (ev (c2, c1, alt, true)); ln.mouseUp (ev (c2, c1, juce::ModifierKeys(), true));
+            bool origStays = false; for (auto* cc : drum->getClips()) if (cc->getPosition().getStart() == origStart) origStays = true;
+            check (drum->getClips().size() == before + 1 && origStays, "Alt + sudrash: nusxa yaratildi, asl klip joyida qoldi");
+        }
+        mc.reset();
+    }
+
     // render (mixdown)
     const auto out = dir.getChildFile ("mixdown.wav");
     std::printf ("       render...\n"); std::fflush (stdout);

@@ -122,6 +122,20 @@ inline juce::String pluginDisplayName (te::Plugin& p)
     return p.getName();
 }
 
+inline void registerAzPlugins (te::Engine&);
+
+// Eksport/bounce paytida Control Room (monitor sozlamalari) miksga ta'sir qilmasin
+struct ScopedControlRoomBypass
+{
+    explicit ScopedControlRoomBypass (te::Edit& e)
+    {
+        for (auto p : e.getMasterPluginList().getPlugins())
+            if (p->getPluginType() == "azcontrolroom") { plugin = p; was = p->isEnabled(); p->setEnabled (false); }
+    }
+    ~ScopedControlRoomBypass() { if (plugin) plugin->setEnabled (was); }
+    te::Plugin::Ptr plugin; bool was = true;
+};
+
 // =============================================================================
 class AppEngine : public juce::ChangeBroadcaster, private juce::Timer
 {
@@ -137,6 +151,7 @@ public:
     {
         engine.getPropertyStorage().getAppCacheFolder().createDirectory();
         engine.getPluginManager().initialiseAirWindows();
+        registerAzPlugins (engine);
         startTimer (60 * 1000);   // avto-saqlash
     }
 
@@ -230,6 +245,7 @@ public:
         r.usePlugins = true; r.useMasterPlugins = true;
         r.tracksToDo = te::toBitSet (te::getAllTracks (*edit));
         out.deleteFile();
+        ScopedControlRoomBypass crb (*edit);
         te::Renderer::renderToFile ("AZ MUS eksport", r);
         return out.existsAsFile() && out.getSize() > 1000;
     }
@@ -266,19 +282,22 @@ public:
         return false;
     }
 
+    static bool isUserPlugin (te::Plugin* p)
+    {
+        return dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr
+            && dynamic_cast<te::AuxSendPlugin*> (p) == nullptr && dynamic_cast<te::AuxReturnPlugin*> (p) == nullptr;
+    }
+    // insert joyi: volume (fader) plaginidan oldin = pre-fader
     static int userPluginCount (te::AudioTrack& t)
     {
-        int n = 0;
-        for (auto p : t.pluginList.getPlugins())
-            if (dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr) ++n;
-        return n;
+        const int v = t.pluginList.getPlugins().indexOf (t.getVolumePlugin());
+        return v >= 0 ? v : t.pluginList.size();
     }
 
     static juce::Array<te::Plugin*> userPlugins (te::AudioTrack& t)
     {
         juce::Array<te::Plugin*> r;
-        for (auto p : t.pluginList.getPlugins())
-            if (dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr) r.add (p);
+        for (auto p : t.pluginList.getPlugins()) if (isUserPlugin (p)) r.add (p);
         return r;
     }
 
@@ -353,6 +372,7 @@ public:
             juce::BigInteger bits; bits.setBit (te::getAllTracks (*edit).indexOf (t)); r.tracksToDo = bits;
             r.allowedClips = cl;
             r.usePlugins = midi; r.useMasterPlugins = false;
+            ScopedControlRoomBypass crb (*edit);
             te::Renderer::renderToFile ("Bounce", r);
             if (! file.existsAsFile()) continue;
             te::AudioFile af (engine, file);

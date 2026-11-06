@@ -3,7 +3,7 @@
 // =============================================================================
 #pragma once
 #include "Arrangement.h"
-#include "AirwindowsList.h"
+#include "PluginPicker.h"
 
 namespace az
 {
@@ -100,7 +100,8 @@ class TopBar : public juce::Component
 {
 public:
     static constexpr int menuH = 26, barH = 58;
-    std::function<void (int)> onLanguage, onTogglePanel;
+    std::function<void (int)> onLanguage, onTogglePanel, onUiZoom;
+    float uiScale = 1.0f;
 
     TopBar (AppEngine& a, juce::MenuBarModel* model) : app (a), menu (model), lcd (a)
     {
@@ -118,6 +119,9 @@ public:
             b->onClick = [this, i] { if (onLanguage) onLanguage (i); };
             addAndMakeVisible (b);
         }
+        iconButton (zoomOutB, "#minus", "Kichiklashtirish (Ctrl -)"); iconButton (zoomInB, "#plus", "Kattalashtirish (Ctrl +)");
+        zoomOutB.onClick = [this] { if (onUiZoom) onUiZoom (-1); }; zoomInB.onClick = [this] { if (onUiZoom) onUiZoom (1); };
+        for (auto* b : { &zoomOutB, &zoomInB }) { b->getProperties().set ("radius", 11.0f); addAndMakeVisible (b); }
         iconButton (pInsp, "#pinsp", "Inspektor (Alt+I)"); iconButton (pMedia, "#pmedia", "Media brauzer (F5)"); iconButton (pMix, "#pmix", "Mikser (F3)");
         int k = 0;
         for (auto* b : { &pInsp, &pMedia, &pMix }) { addAndMakeVisible (b); b->onClick = [this, k] { if (onTogglePanel) onTogglePanel (k); }; ++k; }
@@ -133,7 +137,9 @@ public:
     {
         auto r = getLocalBounds();
         auto mr = r.removeFromTop (menuH).reduced (8, 0);
-        menu.setBounds (mr.removeFromLeft (juce::jmin (mr.getWidth(), 640)));
+        zoomInB.setBounds (mr.removeFromRight (22).withSizeKeepingCentre (22, 22)); mr.removeFromRight (44);
+        zoomOutB.setBounds (mr.removeFromRight (22).withSizeKeepingCentre (22, 22));
+        menu.setBounds (mr.removeFromLeft (juce::jmin (mr.getWidth() - 10, 640)));
         r = r.reduced (14, 0);
         r.removeFromLeft (172);                                   // logotip
         for (auto* b : langB) { b->setBounds (r.removeFromLeft (30).withSizeKeepingCentre (30, 24)); r.removeFromLeft (3); }
@@ -154,6 +160,7 @@ public:
         using namespace juce;
         g.setColour (Colour (0xff0b0a0d)); g.fillRect (0, 0, getWidth(), menuH);
         g.setColour (line); g.drawHorizontalLine (menuH - 1, 0, (float) getWidth());
+        label (g, juce::String (roundToInt (uiScale * 100)) + "%", { (float) zoomOutB.getRight(), 0, (float) (zoomInB.getX() - zoomOutB.getRight()), (float) menuH }, 10.5f, silver, Justification::centred, 600);
         auto bar = Rectangle<float> (0, (float) menuH, (float) getWidth(), (float) barH);
         g.setGradientFill (ColourGradient (Colour (0xff0f0d10), 0, bar.getY(), Colour (0xff0a090c), 0, bar.getBottom(), false)); g.fillRect (bar);
         g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0, (float) getWidth());
@@ -187,7 +194,7 @@ public:
         clickB.setToggleState (app.edit->clickTrackEnabled, juce::dontSendNotification);
         lcd.repaint(); if (cpuW > 0) repaint (getWidth() - cpuW - 20, menuH, cpuW + 20, barH);
     }
-    juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB, pInsp, pMedia, pMix;
+    juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB, pInsp, pMedia, pMix, zoomOutB, zoomInB;
 private:
     AppEngine& app; juce::MenuBarComponent menu; LcdDisplay lcd;
     juce::OwnedArray<juce::TextButton> langB; int cpuW = 158;
@@ -287,13 +294,16 @@ public:
         app.edit->restartPlayback();
     }
 
+    int sendsTop() const { return 112 + 32 * slotCount() + 12; }
+    int channelTop() const { auto* t = track(); return sendsTop() + 22 + 26 * ((t ? Routing::sends (*t).size() : 0) + 1) + 18; }
+
     void resized() override
     {
-        const int y = 112 + 32 * slotCount() + 40;
+        const int y = channelTop();
         vol.setBounds (18, y + 20, 56, 56); pan.setBounds (88, y + 20, 56, 56);
         input.setBounds (12, y + 128, getWidth() - 24, 28);
     }
-    int slotCount() const { auto* t = track(); return t ? AppEngine::userPluginCount (*t) + 1 : 0; }
+    int slotCount() const { auto* t = track(); return t ? AppEngine::userPlugins (*t).size() + 1 : 0; }
 
     void paint (juce::Graphics& g) override
     {
@@ -326,7 +336,26 @@ public:
             label (g, pluginDisplayName (*p), r.withTrimmedLeft (24).withTrimmedRight (50), 11.5f, p->isEnabled() ? silver : dim2, Justification::centredLeft, az ? 700 : 400);
             caps (g, p->isSynth() ? "INSTR" : dynamic_cast<te::ExternalPlugin*> (p) ? "VST3" : "FX", r.withTrimmedRight (9), 8.5f, az ? redSoft : dim, Justification::centredRight);
         }
-        const float y = 112.0f + 32.0f * (float) slotCount() + 40;
+        // ---- sendlar (Group/FX kanallarga)
+        {
+            const float sy = (float) sendsTop();
+            caps (g, "SENDLAR", { 14, sy, 200, 12 });
+            sendRows.clear();
+            auto ss = Routing::sends (*t);
+            for (int i = 0; i <= ss.size(); ++i)
+            {
+                auto r = Rectangle<float> (12, sy + 18 + (float) i * 26, (float) getWidth() - 24, 23);
+                sendRows.add (r);
+                if (i == ss.size()) { panel (g, r, 6, 0.015f, 0.06f); label (g, U ("+  Send (FX kanalga)"), r.reduced (10, 0), 11, dim, Justification::centredLeft, 500); break; }
+                auto* s = ss[i];
+                panel (g, r, 6);
+                const float frac = jlimit (0.0f, 1.0f, (s->getGainDb() + 60.0f) / 66.0f);
+                g.setColour (blue.withAlpha (0.18f)); g.fillRoundedRectangle (r.withWidth (r.getWidth() * frac), 6);
+                label (g, s->getBusName(), r.reduced (10, 0).withTrimmedRight (60), 11, silver, Justification::centredLeft, 500);
+                label (g, String (s->getGainDb(), 1) + " dB", r.reduced (10, 0), 10.5f, text, Justification::centredRight, 500);
+            }
+        }
+        const float y = (float) channelTop();
         caps (g, "KANAL", { 14, y, 200, 12 });
         caps (g, "VOLUME", { 10, y + 80, 72, 12 }, 8.5f, dim, Justification::centred);
         caps (g, "PAN", { 80, y + 80, 72, 12 }, 8.5f, dim, Justification::centred);
@@ -340,11 +369,36 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         auto* t = track(); if (! t) return;
+        dragSend = nullptr;
+        auto ss = Routing::sends (*t);
+        for (int i = 0; i < sendRows.size(); ++i)
+            if (sendRows[i].contains (e.position))
+            {
+                if (i == ss.size()) { showSendMenu (*t); return; }
+                if (e.mods.isPopupMenu())
+                {
+                    te::Plugin::Ptr p (ss[i]);
+                    juce::PopupMenu m; m.addItem (1, U ("Sendni o'chirish"));
+                    m.showMenuAsync ({}, [this, p] (int r) { if (r == 1) p->deleteFromParent(); refresh(); });
+                    return;
+                }
+                dragSend = ss[i]; dragStartDb = ss[i]->getGainDb(); return;
+            }
         auto plugs = AppEngine::userPlugins (*t);
         for (int i = 0; i < slots.size(); ++i)
             if (slots[i].contains (e.position))
             {
-                if (i == plugs.size()) { showPluginMenu (app, *t, [this] { refresh(); }); return; }
+                if (i == plugs.size())
+                {
+                    te::Track::Ptr tp (t);
+                    showPluginPicker (app, localAreaToGlobal (slots[i].toNearestInt()), [this, tp] (const PickItem& it)
+                    {
+                        if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get()))
+                            if (auto p = insertPicked (app, *at, it)) p->showWindowExplicitly();
+                        refresh();
+                    });
+                    return;
+                }
                 te::Plugin::Ptr p (plugs[i]);
                 if (e.mods.isPopupMenu())
                 {
@@ -363,8 +417,61 @@ public:
                 return;
             }
     }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragSend == nullptr) return;
+        dragSend->setGainDb (juce::jlimit (-60.0f, 6.0f, dragStartDb + (float) e.getDistanceFromDragStartX() * 0.25f));
+        repaint();
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (auto* t = track()) { auto ss = Routing::sends (*t); for (int i = 0; i < juce::jmin (ss.size(), sendRows.size()); ++i) if (sendRows[i].contains (e.position)) { ss[i]->setGainDb (-10.0f); repaint(); } }
+    }
+    void showSendMenu (te::AudioTrack& t)
+    {
+        Routing rt (app);
+        juce::PopupMenu m; auto fx = rt.fxTracks();
+        for (int i = 0; i < fx.size(); ++i) if (fx[i] != &t) m.addItem (100 + i, fx[i]->getName());
+        if (fx.size() > 0) m.addSeparator();
+        m.addItem (1, U ("Yangi FX kanal (AZ Reverb)"));
+        m.addItem (2, U ("Yangi FX kanal (AZ Delay)"));
+        m.addItem (3, U ("Yangi FX kanal (plagin tanlash...)"));
+        te::Track::Ptr tp (&t);
+        m.showMenuAsync ({}, [this, tp, fx] (int r)
+        {
+            auto* at = dynamic_cast<te::AudioTrack*> (tp.get()); if (at == nullptr || r == 0) return;
+            Routing rt2 (app);
+            if (r >= 100) { rt2.addSend (*at, Routing::fxBus (*fx[r - 100])); refresh(); if (onRoutingChanged) onRoutingChanged(); return; }
+            auto done = [this, tp] (te::AudioTrack* fxT)
+            {
+                if (auto* src = dynamic_cast<te::AudioTrack*> (tp.get())) if (fxT) Routing (app).addSend (*src, Routing::fxBus (*fxT));
+                refresh(); if (onRoutingChanged) onRoutingChanged();
+            };
+            if (r == 1) done (rt2.addFxChannel ("Reverb", "reverb", {}));
+            if (r == 2) done (rt2.addFxChannel ("Delay", "delay", {}));
+            if (r == 3)
+                showPluginPicker (app, localAreaToGlobal (getLocalBounds().withHeight (40)), [this, done] (const PickItem& it)
+                {
+                    Routing rt3 (app);
+                    juce::String xml; juce::PluginDescription d;
+                    if (it.kind == 0) xml = builtIns[it.index].xmlType;
+                    else if (it.kind == 1) xml = airwindowsPlugins[it.index].xmlType;
+                    else if (it.kind == 2) { xml = te::ExternalPlugin::xmlTypeName; d = app.engine.getPluginManager().knownPluginList.getTypes()[it.index]; }
+                    done (rt3.addFxChannel (it.name, xml, d));
+                });
+        });
+    }
+    std::function<void()> onRoutingChanged;
+
 private:
-    void timerCallback() override { const int n = slotCount(); if (n != lastSlots) { lastSlots = n; refresh(); } }
+    void timerCallback() override
+    {
+        auto* t = track();
+        const int n = slotCount() * 100 + (t ? Routing::sends (*t).size() : 0);
+        if (n != lastSlots) { lastSlots = n; refresh(); }
+    }
+    te::AuxSendPlugin* dragSend = nullptr; float dragStartDb = 0;
+    juce::Array<juce::Rectangle<float>> sendRows;
     AppEngine& app; ViewState& vs;
     juce::Slider vol, pan; juce::ComboBox input;
     juce::Array<juce::Rectangle<float>> slots; int lastSlots = -1;

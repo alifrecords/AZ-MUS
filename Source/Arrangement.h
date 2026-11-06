@@ -216,6 +216,7 @@ public:
         g.setColour (Colours::white.withAlpha (0.08f)); g.fillRect (px - 6, 0.0f, 6.0f, H);
         g.setColour (Colours::white); g.fillRect (px, 0.0f, 1.5f, H);
         if (dropHint) { g.setColour (red.withAlpha (0.6f)); g.drawRect (getLocalBounds(), 2); }
+        if (marquee) { g.setColour (red.withAlpha (0.12f)); g.fillRect (*marquee); g.setColour (red.withAlpha (0.7f)); g.drawRect (*marquee, 1.0f); }
     }
 
     void drawClip (juce::Graphics& g, te::Clip& c, te::AudioTrack& t)
@@ -303,6 +304,7 @@ public:
             if (vs.tool == 3) { app.edit->getUndoManager().beginNewTransaction ("Mute"); c->setMuted (! c->isMuted()); }
             repaint(); return;
         }
+        marquee.reset();
         if (auto* c = clipAt (e.position))
         {
             if (e.mods.isShiftDown() || e.mods.isCommandDown()) app.selection.addToSelection (c);
@@ -310,13 +312,17 @@ public:
             drag.clip = c; drag.startTime = c->getPosition().getStart(); drag.origTrack = dynamic_cast<te::AudioTrack*> (c->getTrack());
             drag.resizeEnd = e.position.x > clipRect (*c).getRight() - 6;
             drag.origLen = c->getPosition().getLength();
-            app.edit->getUndoManager().beginNewTransaction (drag.resizeEnd ? "Uzunlik" : "Ko'chirish");
+            drag.copy = e.mods.isAltDown() && ! drag.resizeEnd;
+            drag.copied = false;
+            drag.group.clear(); drag.groupStarts.clear();
+            for (auto* sc : app.selection.getItemsOfType<te::Clip>()) { drag.group.add (sc); drag.groupStarts.add (sc->getPosition().getStart()); }
+            app.edit->getUndoManager().beginNewTransaction (drag.copy ? U ("Nusxa") : drag.resizeEnd ? U ("Uzunlik") : U ("Ko'chirish"));
             if (e.mods.isPopupMenu()) showClipMenu (*c);
         }
         else
         {
-            app.selection.deselectAll();
-            if (! e.mods.isPopupMenu()) app.edit->getTransport().setPosition (snapTime (*app.edit, vs.xToSec (e.position.x), vs));
+            if (! (e.mods.isShiftDown() || e.mods.isCommandDown())) app.selection.deselectAll();
+            if (! e.mods.isPopupMenu()) marquee = juce::Rectangle<float> (e.position, e.position);
         }
         if (onSelectionChanged) onSelectionChanged();
         vs.changed(); repaint();
@@ -324,13 +330,45 @@ public:
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (drag.clip == nullptr || ! app.edit) return;
+        if (! app.edit) return;
+        if (marquee)   // to'rtburchak bilan belgilash
+        {
+            marquee = juce::Rectangle<float> (e.mouseDownPosition, e.position);
+            app.selection.deselectAll();
+            for (auto* t : te::getAudioTracks (*app.edit))
+                for (auto* c : t->getClips())
+                    if (clipRect (*c).intersects (*marquee)) app.selection.addToSelection (c);
+            repaint(); return;
+        }
+        if (drag.clip == nullptr) return;
+        if (e.getDistanceFromDragStart() < 3 && ! drag.copied) return;
+        // Alt + sudrash = nusxa: asl kliplar joyida qoladi, nusxalari sudraladi
+        if (drag.copy && ! drag.copied)
+        {
+            drag.copied = true;
+            juce::Array<te::Clip*> copies;
+            for (auto* oc : drag.group) if (auto nc = cloneInPlace (*oc)) copies.add (nc.get());
+            const int mainIdx = drag.group.indexOf (drag.clip.get());
+            drag.group = copies;
+            if (juce::isPositiveAndBelow (mainIdx, copies.size())) drag.clip = copies[mainIdx];
+            app.selection.deselectAll();
+            for (auto* c2 : copies) app.selection.addToSelection (c2);
+        }
         auto c = drag.clip;
         const double dt = (double) e.getDistanceFromDragStartX() / vs.pxPerSec;
         if (drag.resizeEnd)
         {
             const auto end = snapTime (*app.edit, (drag.startTime + drag.origLen).inSeconds() + dt, vs);
             if (end > drag.startTime + 0.05s) c->setEnd (end, true);
+        }
+        else if (drag.group.size() > 1)
+        {
+            // bir nechta klip birga: yetakchi klip snap qilinadi, qolganlari bir xil siljiydi
+            const auto lead = snapTime (*app.edit, drag.startTime.inSeconds() + dt, vs);
+            const auto shift = lead - drag.startTime;
+            auto earliest = drag.groupStarts[0]; for (auto s : drag.groupStarts) earliest = juce::jmin (earliest, s);
+            const auto safeShift = earliest + shift < te::TimePosition() ? te::TimePosition() - earliest : shift;
+            for (int i = 0; i < drag.group.size(); ++i) drag.group[i]->setStart (drag.groupStarts[i] + safeShift, false, true);
         }
         else
         {
@@ -340,6 +378,27 @@ public:
         }
         repaint();
     }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (marquee && app.edit)
+        {
+            // sudralmagan bo'lsa — oddiy bosish: kursorni qo'yish
+            if (! e.mouseWasDraggedSinceMouseDown()) app.edit->getTransport().setPosition (snapTime (*app.edit, vs.xToSec (e.position.x), vs));
+            marquee.reset(); repaint();
+            if (onSelectionChanged) onSelectionChanged();
+        }
+        drag = {};
+    }
+
+    te::Clip::Ptr cloneInPlace (te::Clip& c)
+    {
+        auto* t = dynamic_cast<te::ClipTrack*> (c.getTrack());
+        if (t == nullptr) return {};
+        auto st = c.state.createCopy();
+        te::EditItemID::remapIDs (st, nullptr, *app.edit);
+        return t->insertClipWithState (st);
+    }
+    std::optional<juce::Rectangle<float>> marquee;
 
     void mouseMove (const juce::MouseEvent& e) override
     {
@@ -465,7 +524,8 @@ public:
 private:
     ViewState& vs;
     bool dropHint = false;
-    struct Drag { te::Clip::Ptr clip; te::TimePosition startTime; te::TimeDuration origLen; te::AudioTrack* origTrack = nullptr; bool resizeEnd = false; } drag;
+    struct Drag { te::Clip::Ptr clip; te::TimePosition startTime; te::TimeDuration origLen; te::AudioTrack* origTrack = nullptr; bool resizeEnd = false, copy = false, copied = false;
+                  juce::Array<te::Clip*> group; juce::Array<te::TimePosition> groupStarts; } drag;
     std::map<te::EditItemID, std::unique_ptr<te::SmartThumbnail>> thumbs; std::map<te::EditItemID, juce::File> thumbFiles;
 
     te::SmartThumbnail& thumbFor (te::WaveAudioClip& c)

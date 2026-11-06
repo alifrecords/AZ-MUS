@@ -4,6 +4,7 @@
 #pragma once
 #include "Views.h"
 #include "PianoRoll.h"
+#include "Connections.h"
 
 namespace az
 {
@@ -32,7 +33,10 @@ inline const KeyHelp keyHelp[] = {
     { "Ctrl+Shift+A",         "Hammasini ekranga sig'dirish" },
     { "J",                    "Snap yoqish / o'chirish" },
     { "F3",                   "Mikser" },
-    { "F4",                   "Audio sozlamalari" },
+    { "F4",                   "Audio ulanishlar (Inputs, Outputs, FX, Control Room)" },
+    { "Alt + sudrash",        "Klipdan nusxa olish" },
+    { "Bo'sh joyda sudrash",  "To'rtburchak bilan bir nechta klipni belgilash" },
+    { "Ctrl + / Ctrl - / Ctrl 0", "Butun DAW oynasini kattalashtirish / kichiklashtirish / 100%" },
     { "F5",                   "Media brauzer" },
     { "Alt+I",                "Inspektor" },
     { "Ctrl+Z / Ctrl+Y",      "Undo / Redo" },
@@ -85,6 +89,8 @@ public:
         headers.onSelectionChanged = [this] { inspector.refresh(); lanes.repaint(); };
         mixer.onTrackLevel = [this] (te::EditItemID id, float l) { headers.levels[id] = l; };
         media.onInsertFile = [this] (const juce::File& f) { insertFileAtCursor (f); };
+        inspector.onRoutingChanged = [this] { mixer.rebuild(); lanes.repaint(); headers.repaint(); };
+        top.onUiZoom = [this] (int d) { if (onUiZoom) onUiZoom (d); };
 
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
         showInsp = pf.getBoolValue ("azShowInsp", true); showMedia = pf.getBoolValue ("azShowMedia", true); showMixer = pf.getBoolValue ("azShowMixer", true);
@@ -97,7 +103,7 @@ public:
         startTimerHz (30);
         editChanged();
     }
-    ~MainComponent() override { app.onEditChanged = nullptr; app.removeChangeListener (this); vs.removeChangeListener (this); pianoRoll.reset(); }
+    ~MainComponent() override { app.onEditChanged = nullptr; app.removeChangeListener (this); vs.removeChangeListener (this); pianoRoll.reset(); connections.reset(); }
 
     void editChanged()
     {
@@ -106,6 +112,7 @@ public:
         auto ts = te::getAudioTracks (*app.edit);
         if (! ts.isEmpty()) { vs.selectedTrack = ts[0]->itemID; app.routeMidiTo (ts[0]); }
         app.edit->getTransport().addChangeListener (this);
+        Routing (app).controlRoom();        // Control Room har doim master oxirida
         mixer.rebuild(); inspector.refresh();
         if (lanes.getWidth() > 100) zoomToFit();
         refreshAll();
@@ -300,14 +307,18 @@ public:
 
         // F klavishlar (Cubase)
         if (code == KP::F3Key) { togglePanel (2); return true; }
-        if (code == KP::F4Key) { showAudioSettings(); return true; }
+        if (code == KP::F4Key) { showConnections(); return true; }
+        if (ctrl && (k.getTextCharacter() == '=' || k.getTextCharacter() == '+' || code == KP::numberPadAdd)) { if (onUiZoom) onUiZoom (1); return true; }
+        if (ctrl && (k.getTextCharacter() == '-' || code == KP::numberPadSubtract)) { if (onUiZoom) onUiZoom (-1); return true; }
+        if (ctrl && code == '0') { if (onUiZoom) onUiZoom (0); return true; }
         if (code == KP::F5Key) { togglePanel (1); return true; }
         if (alt && ! ctrl && code == 'I') { togglePanel (0); return true; }
         // Numpad (Cubase)
         if (code == KP::numberPadMultiply || (! ctrl && k.getTextCharacter() == '*')) { toggleRecord(); return true; }
         if (code == KP::numberPadDivide   || (! ctrl && k.getTextCharacter() == '/')) { toggleLoop(); return true; }
         if (code == KP::numberPad0)        { stop(); return true; }
-        if (code == KP::numberPadDecimalPoint || code == KP::numberPadDelete) { toStart(); return true; }
+        if (code == KP::deleteKey || code == KP::backspaceKey) { deleteSelected(); return true; }   // (Windows'da Num Del bilan bir xil kod)
+        if (code == KP::numberPadDecimalPoint) { toStart(); return true; }
         if (code == KP::numberPadAdd)      { nudge (1); return true; }
         if (code == KP::numberPadSubtract) { nudge (-1); return true; }
         if (code == KP::returnKey && ! ctrl) { play(); return true; }
@@ -371,7 +382,8 @@ public:
                     add (15, "Bounce Selection", "B"); add (16, "Locatorlar = tanlov", "P"); add (17, "Hammasini belgilash", "Ctrl+A"); m.addSeparator();
                     add (18, "Tanlash", "1", vs.tool == 0); add (19, "Qaychi", "2", vs.tool == 1); add (20, "O'chirg'ich", "3", vs.tool == 2); add (21, "Mute", "4", vs.tool == 3); break;
             case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
-            case 3: add (40, "Audio sozlamalari (ASIO, drayver, bufer)...", "F4"); add (41, "Yozish uchun kirishlarni yangilash"); break;
+            case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
+                    add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); break;
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
             case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
@@ -408,6 +420,8 @@ public:
             case 31: addTrack (true); break;
             case 32: if (app.edit) { auto p = app.edit->getTransport().getPosition(); app.edit->getMarkerManager().createMarker (-1, p, 8s, nullptr); ruler.repaint(); } break;
             case 40: showAudioSettings(); break;
+            case 42: showConnections(); break;
+            case 43: showConnections(); break;
             case 41: if (app.edit) app.setupInputs(); inspector.refresh(); break;
             case 50: chooseFile (U ("MIDI import"), "*.mid;*.midi", false, [this] (juce::File f) { insertFileAtCursor (f); }); break;
             case 51: app.engine.getDeviceManager().rescanMidiDeviceList(); if (app.edit) app.setupInputs(); break;
@@ -417,7 +431,12 @@ public:
             case 63: fitAll(); break;
             case 64: zoomH (1.25); break;
             case 65: zoomH (0.8); break;
-            case 70: if (auto* t = inspector.track()) showPluginMenu (app, *t, [this] { inspector.refresh(); mixer.rebuild(); }); break;
+            case 70: if (auto* t = inspector.track())
+                     {
+                         te::Track::Ptr tp (t);
+                         showPluginPicker (app, localAreaToGlobal (getLocalBounds().withSizeKeepingCentre (10, 10)), [this, tp] (const PickItem& it)
+                         { if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (auto p = insertPicked (app, *at, it)) p->showWindowExplicitly(); inspector.refresh(); mixer.rebuild(); });
+                     } break;
             case 71: showPluginManager(); break;
             case 80: case 81: case 82: setLanguage (id - 80); break;
             case 90: showShortcuts(); break;
@@ -496,6 +515,18 @@ public:
         c->setSize (560, 520); o.content.setOwned (c); o.useNativeTitleBar = true; o.resizable = true;
         o.launchAsync();
     }
+    void showConnections()
+    {
+        if (connections) { connections->toFront (true); return; }
+        connections = std::make_unique<ConnectionsWindow> (app,
+            [this] { juce::MessageManager::callAsync ([this] { connections.reset(); }); },
+            [this] { showAudioSettings(); },
+            [this] { mixer.rebuild(); inspector.refresh(); lanes.repaint(); headers.repaint(); });
+    }
+    std::function<void (int)> onUiZoom;
+    Lanes& getLanes() { return lanes; }
+    void setUiZoomLabel (float s) { top.uiScale = s; top.repaint(); }
+
     void showPluginManager()
     {
         juce::DialogWindow::LaunchOptions o;
@@ -575,6 +606,7 @@ private:
     juce::OwnedArray<juce::TextButton> tools;
     juce::Rectangle<int> toolArea;
     std::unique_ptr<PianoRollWindow> pianoRoll;
+    std::unique_ptr<ConnectionsWindow> connections;
     std::unique_ptr<juce::FileChooser> chooser;
     bool showInsp = true, showMedia = true, showMixer = true, fitted = false;
     int recTick = 0, slow = 0; double lastPos = -1;

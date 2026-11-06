@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.3.0: Audio ulanishlar, FX kanallar, plagin qidiruvi
+| Yangilik | Tafsilot |
+|---|---|
+| **F4: Audio ulanishlar** | Inputs (yoqish, bus nomi), Outputs (Main Mix tanlash), Group/FX (FX kanallar), External FX va External Instruments (apparat qurilmalar send/return), Control Room (monitor chiqishi, balandlik, Dim −20 dB, Mono, Mute; eksportga ta'sir qilmaydi) |
+| **Sendlar** | Inspektorda SENDLAR: FX kanalga post-fader send, gorizontal sudrash bilan balandlik |
+| **Plagin qidiruvi** | Nom, bosh harflar yoki ishlab chiqaruvchi bo'yicha; ↑ ↓ Enter; Tab: kategoriya |
+| **Sichqoncha** | Bo'sh joyda sudrash: to'rtburchak bilan belgilash; Alt + sudrash: nusxa; bir nechta klip birga ko'chadi |
+| **Masshtab** | Butun DAW oynasi: − / + (menyu qatori o'ngida) yoki Ctrl + / Ctrl − / Ctrl 0 |
+| **Tuzatish** | Delete klipni o'chirmasdi (Windows'da Num Del bilan bir xil kod), endi o'chiradi |
+
 ## 0.2.0: Daftar DAW klavishlari, 3 til, yopiladigan panellar
 | Klavish | Vazifa |
 |---|---|

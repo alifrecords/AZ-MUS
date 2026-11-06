@@ -107,6 +107,36 @@ private:
 };
 
 // ---------------------------------------------------------------- Asosiy oyna
+// Butun DAW maydonini masshtablash (Ctrl + / Ctrl - / Ctrl 0, yoki menyu qatoridagi − +)
+class ZoomHost : public juce::Component
+{
+public:
+    ZoomHost (az::AppEngine& a) : app (a), main (a)
+    {
+        addAndMakeVisible (main);
+        scale = (float) app.engine.getPropertyStorage().getPropertiesFile().getDoubleValue ("azUiScale", 1.0);
+        main.onUiZoom = [this] (int d) { step (d); };
+        main.setUiZoomLabel (scale);
+        setSize (1680, 1000);
+    }
+    void step (int d)
+    {
+        static const float steps[] = { 0.7f, 0.8f, 0.9f, 1.0f, 1.1f, 1.25f, 1.4f, 1.6f, 1.8f, 2.0f };
+        int i = 3; float best = 10;
+        for (int k = 0; k < 10; ++k) if (std::abs (steps[k] - scale) < best) { best = std::abs (steps[k] - scale); i = k; }
+        scale = d == 0 ? 1.0f : steps[juce::jlimit (0, 9, i + d)];
+        app.engine.getPropertyStorage().getPropertiesFile().setValue ("azUiScale", (double) scale);
+        main.setUiZoomLabel (scale);
+        resized();
+    }
+    void resized() override
+    {
+        main.setTransform (juce::AffineTransform::scale (scale));
+        main.setBounds (0, 0, juce::roundToInt ((float) getWidth() / scale), juce::roundToInt ((float) getHeight() / scale));
+    }
+    az::AppEngine& app; az::MainComponent main; float scale = 1.0f;
+};
+
 class MainWindow : public juce::DocumentWindow
 {
 public:
@@ -114,7 +144,7 @@ public:
         : DocumentWindow ("AZ MUS", az::bg0, DocumentWindow::allButtons)
     {
         setUsingNativeTitleBar (true);
-        setContentOwned (new az::MainComponent (app), true);
+        setContentOwned (new ZoomHost (app), false);
         setResizable (true, false);
         setResizeLimits (1200, 720, 10000, 10000);
         centreWithSize (1680, 1000);
@@ -247,6 +277,16 @@ private:
             case 6:
                 stopTimer(); splash.reset();
                 if (mainWindow) mainWindow->toFront (true);
+                if (args.contains ("--hold"))   // test: oynalarni ochib, tashqaridan skrinshot olish uchun
+                {
+                    if (auto* zh = dynamic_cast<ZoomHost*> (mainWindow->getContentComponent()))
+                    {
+                        if (args.contains ("--connections")) zh->main.showConnections();
+                        if (args.contains ("--picker"))
+                            az::showPluginPicker (*app, zh->main.localAreaToGlobal (juce::Rectangle<int> (110, 200, 120, 26)), [] (const az::PickItem&) {});
+                    }
+                    break;
+                }
                 if (args.contains ("--screenshot")) { stage = 50; startTimer (2500); }
                 else if (! failedPlugins.isEmpty())
                 {
@@ -261,6 +301,7 @@ private:
             {
                 stopTimer();
                 const auto out = juce::File::getCurrentWorkingDirectory().getChildFile (args[args.indexOf ("--screenshot") + 1]);
+                if (args.contains ("--connections")) if (auto* zh = dynamic_cast<ZoomHost*> (mainWindow->getContentComponent())) { zh->main.showConnections(); }
                 auto img = mainWindow->getContentComponent()->createComponentSnapshot (mainWindow->getContentComponent()->getLocalBounds(), true, 1.0f);
                 juce::FileOutputStream fo (out); fo.setPosition (0); fo.truncate();
                 juce::PNGImageFormat().writeImageToStream (img, fo);

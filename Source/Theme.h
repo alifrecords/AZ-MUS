@@ -234,6 +234,8 @@ namespace az
             else if (t == "#scissors") { fill = false; p.addEllipse (cx - s, cy + s * 0.2f, s * 0.7f, s * 0.7f); p.addEllipse (cx + s * 0.3f, cy + s * 0.2f, s * 0.7f, s * 0.7f); p.startNewSubPath (cx - s * 0.5f, cy + s * 0.3f); p.lineTo (cx + s * 0.6f, cy - s); p.startNewSubPath (cx + s * 0.5f, cy + s * 0.3f); p.lineTo (cx - s * 0.6f, cy - s); }
             else if (t == "#grid") { fill = false; for (int i = -1; i <= 1; i += 2) { p.startNewSubPath (cx + i * s * 0.45f, cy - s); p.lineTo (cx + i * s * 0.45f, cy + s); p.startNewSubPath (cx - s, cy + i * s * 0.45f); p.lineTo (cx + s, cy + i * s * 0.45f); } }
             else if (t == "#gear") { fill = false; p.addEllipse (cx - s * 0.45f, cy - s * 0.45f, s * 0.9f, s * 0.9f); for (int i = 0; i < 8; ++i) { const float a = (float) i * MathConstants<float>::pi / 4; p.startNewSubPath (cx + std::cos (a) * s * 0.75f, cy + std::sin (a) * s * 0.75f); p.lineTo (cx + std::cos (a) * s * 1.1f, cy + std::sin (a) * s * 1.1f); } }
+            else if (t == "#search") { fill = false; p.addEllipse (cx - s * 0.9f, cy - s * 0.9f, s * 1.4f, s * 1.4f); p.startNewSubPath (cx + s * 0.35f, cy + s * 0.35f); p.lineTo (cx + s * 1.0f, cy + s * 1.0f); }
+            else if (t == "#minus")  { fill = false; p.startNewSubPath (cx - s, cy); p.lineTo (cx + s, cy); }
             else if (t == "#pinsp")  { fill = false; p.addRoundedRectangle (cx - s * 1.1f, cy - s, s * 2.2f, s * 2.0f, 2.0f); p.startNewSubPath (cx - s * 0.35f, cy - s); p.lineTo (cx - s * 0.35f, cy + s); }
             else if (t == "#pmedia") { fill = false; p.addRoundedRectangle (cx - s * 1.1f, cy - s, s * 2.2f, s * 2.0f, 2.0f); p.startNewSubPath (cx + s * 0.35f, cy - s); p.lineTo (cx + s * 0.35f, cy + s); }
             else if (t == "#pmix")   { fill = false; for (int i = -1; i <= 1; ++i) { p.startNewSubPath (cx + i * s * 0.75f, cy - s); p.lineTo (cx + i * s * 0.75f, cy + s); p.addRectangle (cx + i * s * 0.75f - s * 0.28f, cy + (i == 0 ? -s * 0.5f : i < 0 ? s * 0.2f : -s * 0.1f), s * 0.56f, s * 0.3f); } }
@@ -270,6 +272,14 @@ namespace az
             g.setColour (e.hasKeyboardFocus (true) ? red.withAlpha (0.6f) : juce::Colours::white.withAlpha (0.1f));
             g.drawRoundedRectangle (0.5f, 0.5f, (float) w - 1, (float) h - 1, 7, 1);
         }
+
+        void drawCallOutBoxBackground (juce::CallOutBox&, juce::Graphics& g, const juce::Path& path, juce::Image&) override
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillPath (path, juce::AffineTransform::translation (0, 3));
+            g.setColour (juce::Colour (0xff121014)); g.fillPath (path);
+            g.setColour (red.withAlpha (0.35f)); g.strokePath (path, juce::PathStrokeType (1.0f));
+        }
+        int getCallOutBoxBorderSize (const juce::CallOutBox&) override { return 14; }
 
         void drawTreeviewPlusMinusBox (juce::Graphics& g, const juce::Rectangle<float>& a, juce::Colour, bool isOpen, bool over) override
         {
