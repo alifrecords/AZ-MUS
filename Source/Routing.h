@@ -103,7 +103,7 @@ public:
         if (! isEnabled() || fc.destBuffer == nullptr || ! ready.load()) return;
         juce::dsp::AudioBlock<float> block (*fc.destBuffer);
         auto sub = block.getSubBlock ((size_t) fc.bufferStartSample, (size_t) fc.bufferNumSamples)
-                        .getSubsetChannelBlock (0, juce::jmin<size_t> (2, block.getNumChannels()));
+                        .getSubsetChannelBlock (0, std::min<size_t> (2, block.getNumChannels()));
         conv.process (juce::dsp::ProcessContextReplacing<float> (sub));
     }
     void restorePluginStateFromValueTree (const juce::ValueTree& v) override
