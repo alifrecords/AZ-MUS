@@ -4,6 +4,7 @@
 #pragma once
 #include "Views.h"
 #include "Dop.h"
+#include "AudioEditor.h"
 #include "PianoRoll.h"
 #include "Connections.h"
 
@@ -60,7 +61,7 @@ class MainComponent : public juce::Component, public juce::MenuBarModel, public 
 {
 public:
     explicit MainComponent (AppEngine& a)
-        : app (a), top (a, this), gridBar (a, vs), inspector (a, vs), ruler (a, vs), headers (a, vs), lanes (a, vs), mixer (a), media (a), status (a)
+        : app (a), top (a, this), gridBar (a, vs), inspector (a, vs), ruler (a, vs), headers (a, vs), lanes (a, vs), mixer (a), media (a), status (a), editor (a, vs)
     {
         setOpaque (true);
         for (auto* c : std::initializer_list<juce::Component*> { &top, &gridBar, &inspector, &ruler, &headers, &lanes, &mixer, &media, &status, &toolAdd, &toolSnap, &toolBounce })
@@ -110,6 +111,17 @@ public:
         lanes.onBounce = [this] { bounce(); };
         lanes.onQuantize = [this] { quantizeSelected(); };
         mixer.onDetach = [this] { toggleMixerWindow(); };
+        // pastki zona: MIKSER | EDITOR (Cubase kabi)
+        addChildComponent (editor);
+        for (auto* b : { &lowMixB, &lowEdB }) { addAndMakeVisible (b); b->setClickingTogglesState (true); b->setRadioGroupId (601); b->getProperties().set ("radius", 4.0f); b->setWantsKeyboardFocus (false); }
+        lowMixB.setButtonText (U ("MIKSER (F3)")); lowEdB.setButtonText (U ("EDITOR (Enter)"));
+        lowMixB.setToggleState (true, juce::dontSendNotification);
+        lowMixB.onClick = [this] { editorOpen = false; showMixer = true; resized(); };
+        lowEdB.onClick = [this] { editorOpen = true; resized(); };
+        editor.onClose = [this] { editorOpen = false; lowMixB.setToggleState (true, juce::dontSendNotification); resized(); };
+        editor.onChanged = [this] { lanes.repaint(); mixer.rebuild(); refreshAll(); };
+        editor.onToast = [this] (const juce::String& m) { toast (m); };
+        lanes.onOpenAudioEditor = [this] (te::WaveAudioClip& c) { openAudioEditor (c); };
         // plagin oynalari ochiq bo'lsa ham transport ishlasin
         pluginWindowTransport = [this] (int c) { if (c == 0) togglePlay(); if (c == 1) stop(); if (c == 2 && app.edit) { app.edit->getTransport().setPosition (te::TimePosition()); refreshAll(); } };
         pluginWindowKeys = [this] (const juce::KeyPress& k) { return keyPressed (k); };
@@ -184,6 +196,15 @@ public:
         return U ("Quantize ") + ViewState::divisionName (q) + ": " + juce::String (moved) + U (" klip, ") + juce::String (notes) + U (" nota");
     }
     void quantizeSelected() { toast (quantizeClips (selectedClips())); refreshAll(); }
+
+    // ---------------------------------------------------------------- Audio Editor (AudioWarp / AZ Pitch / Xor / tozalash)
+    void openAudioEditor (te::WaveAudioClip& c)
+    {
+        editorOpen = true; lowEdB.setToggleState (true, juce::dontSendNotification);
+        editor.setClip (&c);
+        resized();
+    }
+    AudioEditor& getAudioEditor() { return editor; }
 
     // ---------------------------------------------------------------- Direct Offline Processing (F7)
     juce::Array<te::WaveAudioClip*> selectedAudioClips()
@@ -266,10 +287,27 @@ public:
         top.setBounds (r.removeFromTop (TopBar::menuH + TopBar::barH));
         status.setBounds (r.removeFromBottom (26));
         inspector.setVisible (showInsp); media.setVisible (showMedia);
-        if (! mixerWindow)
+        editor.setVisible (editorOpen);
+        const bool lowerVisible = editorOpen || (showMixer && ! mixerWindow);
+        lowMixB.setVisible (lowerVisible); lowEdB.setVisible (lowerVisible);
+        if (editorOpen)
+        {
+            if (! mixerWindow) mixer.setVisible (false);
+            auto lz = r.removeFromBottom (juce::jlimit (320, 560, getHeight() * 46 / 100));
+            auto tb = lz.removeFromTop (24).reduced (8, 2);
+            lowMixB.setBounds (tb.removeFromLeft (110)); tb.removeFromLeft (4); lowEdB.setBounds (tb.removeFromLeft (120));
+            editor.setBounds (lz);
+        }
+        else if (! mixerWindow)
         {
             mixer.setVisible (showMixer);
-            if (showMixer) mixer.setBounds (r.removeFromBottom (juce::jlimit (236, 300, getHeight() * 34 / 100)));
+            if (showMixer)
+            {
+                auto lz = r.removeFromBottom (juce::jlimit (236, 300, getHeight() * 34 / 100) + 24);
+                auto tb = lz.removeFromTop (24).reduced (8, 2);
+                lowMixB.setBounds (tb.removeFromLeft (110)); tb.removeFromLeft (4); lowEdB.setBounds (tb.removeFromLeft (120));
+                mixer.setBounds (lz);
+            }
         }
         if (showInsp) inspector.setBounds (r.removeFromLeft (236));
         if (showMedia) media.setBounds (r.removeFromRight (260));
@@ -455,6 +493,8 @@ public:
         if (code == KP::F3Key) { togglePanel (2); return true; }
         if (code == KP::F4Key) { showConnections(); return true; }
         if (code == KP::F7Key) { openDop(); return true; }
+        if (code == KP::returnKey && ! top.getTempo().tapMode && ! ctrl && ! alt)
+            if (auto cl = selectedAudioClips(); ! cl.isEmpty()) { openAudioEditor (*cl[0]); return true; }
         // Tap rejimi: Probel = tap, Enter = qo'llash, Esc = chiqish
         if (auto& tb = top.getTempo(); tb.tapMode)
         {
@@ -796,7 +836,8 @@ private:
 
     AppEngine& app;
     ViewState vs;
-    TopBar top; GridBar gridBar; Inspector inspector; TimeRuler ruler; TrackHeaders headers; Lanes lanes; Mixer mixer; MediaBrowser media; StatusBar status;
+    TopBar top; GridBar gridBar; Inspector inspector;
+    bool editorOpen = false; juce::TextButton lowMixB, lowEdB; TimeRuler ruler; TrackHeaders headers; Lanes lanes; Mixer mixer; MediaBrowser media; StatusBar status; AudioEditor editor;
     juce::TextButton toolAdd, toolSnap, toolBounce;
     juce::OwnedArray<juce::TextButton> tools;
     juce::Rectangle<int> toolArea;

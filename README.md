@@ -6,6 +6,20 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.9.0: Audio Editor — AudioWarp · AZ Pitch (VariAudio/Melodyne uslubi) · Xor · Vokal tozalash
+Audio klipni **2 marta bosing** (yoki tanlab **Enter**) — pastki zonada **EDITOR** ochiladi (MIKSER | EDITOR yorliqlari).
+
+| Bo'lim | Nima qiladi |
+|---|---|
+| **AudioWarp** | Musical Mode (asl BPM → loyiha tempi), algoritm (SoundTouch Normal/Better), hitpoint'lar ko'rinadi, **Hitpoint → Quantize** (1/4, 1/8, 1/16 + swing) |
+| **AZ Pitch** | Vokal notalarga bo'linadi va "suv tomchisi" ko'rinishida chiziladi: yashil — tonallikda, sariq — biroz chetda, qizil — fals. Ichida real pitch egri chizig'i. Sudrash — yarim tonga yopishadi (Alt — erkin, cent), ↑/↓, 2x bosish — tonallikka, Shift/ramka — bir nechta, Ctrl+A |
+| AUTO tuzatish (aqlli) | Har notaning markazini tonallikning eng yaqin notasiga aniq joylaydi + 35% Straighten; natija: nechta nota tuzatildi va o'rtacha og'ish (cent) |
+| Correct Pitch / Straighten | Tanlangan (yoki barcha) notalarga; Auto Apply bilan darhol eshitiladi |
+| **Xor / Garmoniya** | Bir bosish: 3↑ 3↓ 4↑ 5↑ 4↓ 8↓, **XOR 3**, **XOR 6** — tonallikka mos diatonik intervallar, inson kabi kechikish (15–30 ms), detune va panorama bilan yangi treklarga |
+| **Vokal tozalash** | Bir bosish: HPF 80 Hz, nafasni pasaytirish, jimlikda gate, de-esser (sozlanadi; olib tashlash mumkin) |
+
+Pitch o'zgartirish TD-PSOLA bilan — formantlar saqlanadi. Hamma tahrir DOP stekida: asl fayl o'zgarmaydi, loyiha bilan saqlanadi, "Asliga qaytarish" bor.
+
 ## 0.8.0: AZ BEAT Normalize/Delay/papkani varaqlash · plagin oynasida Play va "Qotirish" · AUTO LVL
 | Funksiya | Qanday |
 |---|---|

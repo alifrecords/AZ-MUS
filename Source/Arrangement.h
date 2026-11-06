@@ -719,6 +719,7 @@ public:
         if (auto* c = clipAt (e.position))
         {
             if (auto* mc = dynamic_cast<te::MidiClip*> (c)) if (onOpenPianoRoll) onOpenPianoRoll (*mc);
+            if (auto* wc = dynamic_cast<te::WaveAudioClip*> (c)) if (onOpenAudioEditor) onOpenAudioEditor (*wc);
             return;
         }
         if (auto* t = trackAtY (e.y))
@@ -757,6 +758,7 @@ public:
     }
 
     std::function<void()> onDop, onRenderSel, onBounce, onQuantize;
+    std::function<void (te::WaveAudioClip&)> onOpenAudioEditor;
     void showClipMenu (te::Clip& c)
     {
         juce::PopupMenu m;

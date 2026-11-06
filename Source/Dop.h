@@ -5,6 +5,7 @@
 // =============================================================================
 #pragma once
 #include "Views.h"
+#include "Pitch.h"
 
 namespace az
 {
@@ -22,6 +23,8 @@ inline const ProcDef procDefs[] = {
     { "reverse",   "Reverse" },
     { "dc",        "Remove DC Offset" },
     { "silence",   "Silence" },
+    { "pitch",     "AZ Pitch (VariAudio)" },
+    { "vclean",    "Vokal tozalash" },
 };
 inline juce::String procName (const juce::String& type)
 {
@@ -63,6 +66,7 @@ inline juce::ValueTree makeProc (const juce::String& type)
     if (type == "gain")      p.setProperty ("db", 0.0, nullptr);
     if (type == "normalize") p.setProperty ("db", -1.0, nullptr);
     if (type == "fadein" || type == "fadeout") { p.setProperty ("len", 0.5, nullptr); p.setProperty ("curve", 1, nullptr); }
+    if (type == "vclean") { p.setProperty ("hpf", true, nullptr); p.setProperty ("breath", -12.0, nullptr); p.setProperty ("gate", -30.0, nullptr); p.setProperty ("deess", -6.0, nullptr); }
     return p;
 }
 
@@ -216,6 +220,21 @@ inline void applyProc (const juce::ValueTree& p, juce::AudioBuffer<float>& b, do
             const int idx = t == "fadein" ? r0 + i : r1 - 1 - i;
             for (int c = 0; c < C; ++c) b.getWritePointer (c)[idx] *= (float) gn;
         }
+    }
+    else if (t == "pitch")
+    {
+        auto an = pitch::loadAnalysis (p);
+        if (an.frames() > 0 && std::abs (an.sampleRate - sr) < 1.0)
+        {
+            auto notes = pitch::loadNotes (p);
+            b = pitch::renderNotes (b, an, notes);
+        }
+    }
+    else if (t == "vclean")
+    {
+        auto an = pitch::analyse (b, sr);
+        pitch::CleanSettings cs; cs.hpf = p["hpf"]; cs.breathDb = (float) (double) p["breath"]; cs.gateDb = (float) (double) p["gate"]; cs.deessDb = (float) (double) p["deess"];
+        pitch::clean (b, sr, an, cs);
     }
     else if (t == "envelope")
     {

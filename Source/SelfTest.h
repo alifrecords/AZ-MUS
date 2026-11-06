@@ -753,6 +753,115 @@ inline int runSelfTest (const juce::StringArray& args)
         }
     }
 
+    // ================= 0.9: AZ Pitch (VariAudio) · AUTO tuzatish · PSOLA · xor · vokal tozalash · AudioWarp
+    {
+        const double sr = 48000;
+        // sintetik vokal: A3, C4 (-35 cent), E4 (+40 cent), [nafas], D4 (vibrato +-30 cent)
+        struct N { double t0, t1, midi, vib; };
+        const N seq[] = { { 0.10, 0.60, 57.0, 0 }, { 0.65, 1.15, 59.65, 0 }, { 1.20, 1.70, 64.40, 0 }, { 2.10, 2.80, 62.0, 0.30 } };
+        const int len = (int) (sr * 3.0);
+        juce::AudioBuffer<float> voc (1, len); voc.clear();
+        juce::Random rnd (5); double ph = 0;
+        for (int i = 0; i < len; ++i)
+        {
+            const double t = i / sr; double m = -1, env = 0;
+            for (auto& n : seq) if (t >= n.t0 && t < n.t1) { m = n.midi + n.vib * std::sin (2 * juce::MathConstants<double>::pi * 5.5 * (t - n.t0)); env = juce::jmin (1.0, juce::jmin ((t - n.t0) / 0.02, (n.t1 - t) / 0.02)); }
+            float v = 0;
+            if (m > 0)
+            {
+                ph += 440.0 * std::pow (2.0, (m - 69) / 12.0) / sr;
+                for (int k = 1; k <= 18; ++k) v += (float) (std::sin (2 * juce::MathConstants<double>::pi * k * ph) / k * (k == 3 || k == 4 ? 1.8 : 1.0));
+                v *= (float) (0.12 * env);
+            }
+            if (t > 1.78 && t < 2.02) v += (rnd.nextFloat() * 2 - 1) * 0.02f;     // nafas
+            voc.setSample (0, i, v);
+        }
+        auto an = az::pitch::analyse (voc, sr);
+        auto notes = az::pitch::segment (an);
+        std::printf ("       AZ Pitch notalar:"); for (auto& n : notes) std::printf (" [%.2f-%.2f %.2f]", n.start, n.end, n.orig); std::printf ("\n");
+        bool ok = notes.size() == 4;
+        const double exp[] = { 57.0, 59.65, 64.40, 62.0 };
+        for (size_t i = 0; ok && i < 4; ++i) ok = std::abs (notes[i].orig - exp[i]) < 0.12;
+        check (ok, "AZ Pitch: vokal 4 notaga to'g'ri bo'lindi, ton aniqligi +-12 cent");
+        auto fixedNotes = notes;
+        const auto am = az::sync::keyFromString ("A minor");
+        auto ar = az::pitch::autoCorrect (fixedNotes, am, 1.0f, 0.35f);
+        std::printf ("       AUTO: %d nota, og'ish %.0f -> %.0f cent\n", ar.fixedNotes, ar.avgCentsBefore, ar.avgCentsAfter);
+        check (fixedNotes.size() == 4 && std::abs (fixedNotes[1].pitch - 60) < 0.01f && std::abs (fixedNotes[2].pitch - 64) < 0.01f && ar.avgCentsAfter < 1,
+               "AUTO tuzatish: fals notalar (C4-35c, E4+40c) tonallikka aniq joylandi");
+        // PSOLA render va qayta tahlil
+        auto outB = az::pitch::renderNotes (voc, an, fixedNotes);
+        auto an2 = az::pitch::analyse (outB, sr);
+        auto n2 = az::pitch::segment (an2);
+        std::printf ("       PSOLA'dan keyin:"); for (auto& n : n2) std::printf (" %.2f", n.orig); std::printf ("\n");
+        bool ok2 = n2.size() == 4 && outB.getNumSamples() == voc.getNumSamples();
+        const double tgt[] = { 57, 60, 64, 62 };
+        for (size_t i = 0; ok2 && i < 4; ++i) ok2 = std::abs (n2[i].orig - tgt[i]) < 0.12;
+        check (ok2, "PSOLA: tuzatilgan vokal haqiqatan tonallikda (qayta tahlil +-12 cent), uzunlik o'zgarmagan");
+        // garmoniya: tertsiya yuqoriga (A minor): A->C, C->E, E->G, D->F
+        check (az::pitch::diatonicShift (57, 2, am) == 3 && az::pitch::diatonicShift (60, 2, am) == 4 && az::pitch::diatonicShift (64, 2, am) == 3
+               && az::pitch::diatonicShift (62, 4, am) == 7 && az::pitch::diatonicShift (60, -2, am) == -3, "Garmoniya: diatonik tertsiya/kvinta tonallikka mos");
+        {
+            az::pitch::Voice v { "t", 2, 0, 0, 0, 0 };
+            auto hb = az::pitch::renderVoice (voc, an, fixedNotes, v, am, 1);
+            auto nh = az::pitch::segment (az::pitch::analyse (hb, sr));
+            std::printf ("       tertsiya ovozi:"); for (auto& n : nh) std::printf (" %.2f", n.orig); std::printf ("\n");
+            check (nh.size() >= 4 && std::abs (nh[0].orig - 60) < 0.15 && std::abs (nh[1].orig - 64) < 0.15 && std::abs (nh[2].orig - 67) < 0.15, "Xor: tertsiya ovozi to'g'ri notalarda (C4, E4, G4 ...)");
+        }
+        // vokal tozalash: nafas pasayadi, ovoz o'zgarmaydi
+        {
+            auto cb = voc; az::pitch::CleanSettings cs; az::pitch::clean (cb, sr, an, cs);
+            auto rmsDb = [&] (const juce::AudioBuffer<float>& b, double a, double z) { return juce::Decibels::gainToDecibels (b.getRMSLevel (0, (int) (a * sr), (int) ((z - a) * sr)), -200.0f); };
+            const float br0 = rmsDb (voc, 1.85, 1.98), br1 = rmsDb (cb, 1.85, 1.98), vo0 = rmsDb (voc, 0.2, 0.5), vo1 = rmsDb (cb, 0.2, 0.5);
+            std::printf ("       tozalash: nafas %.1f -> %.1f dB, ovoz %.1f -> %.1f dB\n", br0, br1, vo0, vo1);
+            check (br1 < br0 - 8 && std::abs (vo1 - vo0) < 1.5f, "Vokal tozalash: nafas >8 dB pasaydi, ovoz saqlandi");
+        }
+        // Editor integratsiyasi
+        auto a11 = std::make_unique<az::AppEngine>(); a11->newProject (dir.getChildFile ("t09.azmus"));
+        auto& e11 = *a11->edit; e11.tempoSequence.getTempo (0)->setBpm (120.0); e11.state.setProperty ("azKey", "A minor", nullptr);
+        for (auto* t : te::getAudioTracks (e11)) e11.deleteTrack (t);
+        const auto vf = dir.getChildFile ("synth_vocal.wav");
+        { juce::WavAudioFormat wav; vf.deleteFile(); if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (vf), sr, 1, 24, {}, 0))) w->writeFromAudioSampleBuffer (voc, 0, voc.getNumSamples()); }
+        auto* vt = a11->addAudioTrack ("Vokal");
+        auto vc = vt->insertWaveClip ("Vokal", vf, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (3.0)), {} }, false);
+        auto mc11 = std::make_unique<az::MainComponent> (*a11); mc11->setSize (1600, 900);
+        mc11->openAudioEditor (*vc);
+        auto& ed = mc11->getAudioEditor();
+        check (ed.getNotes().size() == 4, "Audio Editor: klip 2x bosilganda ochildi va AZ Pitch tahlil qildi");
+        ed.runAuto(); ed.renderNow();
+        const auto nf = vc->getSourceFileReference().getFile();
+        check (nf != vf && nf.getFileName().contains ("_DOP_") && az::dop::originalFile (*vc) == vf, "AZ Pitch: AUTO natija klipga qo'llandi (asl fayl saqlanadi)");
+        // saqlash / qayta ochish
+        a11->saveIfPossible();
+        {
+            auto a12 = std::make_unique<az::AppEngine>(); a12->openProject (a11->editFile);
+            auto* c12 = dynamic_cast<te::WaveAudioClip*> (te::getAudioTracks (*a12->edit)[0]->getClips()[0]);
+            juce::ValueTree pp; if (c12) for (auto p : az::dop::stack (*c12, false)) if (p["type"].toString() == "pitch") pp = p;
+            auto ln = az::pitch::loadNotes (pp);
+            check (ln.size() == 4 && std::abs (ln[1].pitch - 60) < 0.01f, "AZ Pitch tahrirlari loyiha bilan saqlanadi");
+        }
+        const int tBefore = te::getAudioTracks (e11).size();
+        ed.makeHarmony (6);
+        auto ts11 = te::getAudioTracks (e11);
+        check (ts11.size() == tBefore + 3 && ts11[1]->getName().contains ("Xor") && ts11[1]->getClips().size() == 1, "XOR 3: bir bosishda 3 ta garmoniya treki yaratildi");
+        // vokal tozalash (DOP stekida)
+        ed.setTab (3); ed.applyClean (true);
+        bool hasClean = false; for (auto p : az::dop::stack (*vc, false)) hasClean |= p["type"].toString() == "vclean";
+        check (hasClean && vc->getSourceFileReference().getFile() != nf, "Vokal tozalash bir bosishda qo'llandi");
+        // AudioWarp: hitpoint quantize + swing
+        {
+            auto* dt = a11->addAudioTrack ("Drum");
+            auto dc = dt->insertWaveClip ("hits", dir.getChildFile ("hits.wav"), { te::TimeRange (te::TimePosition::fromSeconds (0.03), te::TimePosition::fromSeconds (3.03)), {} }, false);
+            mc11->openAudioEditor (*dc); ed.setTab (0); ed.swingSlider().setValue (0);
+            ed.quantizeHitpoints();
+            bool onGrid = dt->getClips().size() >= 3;
+            for (auto* c : dt->getClips()) { const double b = e11.tempoSequence.toBeats (c->getPosition().getStart()).inBeats(); onGrid &= std::abs (b * 4 - std::round (b * 4)) < 1e-4; }
+            std::printf ("       hitpoint quantize: %d bo'lak\n", dt->getClips().size());
+            check (onGrid, "AudioWarp: hitpoint'lar bo'yicha bo'lindi va 1/16 gridga quantize qilindi");
+        }
+        mc11.reset();
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;
