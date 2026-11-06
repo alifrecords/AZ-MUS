@@ -19,6 +19,8 @@ struct TrEntry { const char8_t* uz; const char8_t* ru; const char8_t* en; };
 inline juce::String tr (const juce::String& s)
 {
     static const TrEntry entries[] = {
+        { u8"+ Master insert", u8"+ Мастер-инсерт", u8"+ Master insert" },
+        { u8"Master insert qo'shish (mastering)...", u8"Добавить мастер-инсерт (мастеринг)...", u8"Add master insert (mastering)..." },
         { u8"\n\nQayta urinish: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist", u8"\n\nПовторить: Плагины → Сканирование VST3 плагинов → Options → Clear blacklist", u8"\n\nRetry: Plugins → Scan VST3 plugins → Options → Clear blacklist" },
         { u8" klip", u8" клипов", u8" clips" },
         { u8" klip bitta audioga birlashtirildi. Ctrl+Z — qaytarish.", u8" клипов объединено в одно аудио. Ctrl+Z — отмена.", u8" clip(s) merged into one audio. Ctrl+Z — undo." },

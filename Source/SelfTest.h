@@ -287,6 +287,20 @@ inline int runSelfTest (const juce::StringArray& args)
         mc.reset();
     }
 
+    // Master insert (mastering): limiter master zanjirida, Control Room'dan oldin, saqlanadi
+    {
+        az::PickItem it; it.kind = 0; it.index = 1;   // AZ Kompressor
+        auto p = az::insertMaster (*app2, it);
+        auto ins = az::masterInserts (*app2->edit);
+        auto& ml = app2->edit->getMasterPluginList();
+        const bool beforeCR = ml.getPlugins().getLast()->getPluginType() == "azcontrolroom";
+        check (p != nullptr && ins.size() == 1 && beforeCR, "Master insert: AZ Kompressor master zanjirida (Control Room'dan oldin)");
+        app2->saveIfPossible();
+        auto app3 = std::make_unique<az::AppEngine>(); app3->openProject (f);
+        check (az::masterInserts (*app3->edit).size() == 1, "Master insert loyiha bilan saqlanadi");
+        app3.reset();
+    }
+
     // render (mixdown)
     const auto out = dir.getChildFile ("mixdown.wav");
     std::printf ("       render...\n"); std::fflush (stdout);

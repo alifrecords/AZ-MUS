@@ -6,6 +6,15 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.3.1: Master insert (mastering zanjiri)
+| Qayerda | Qanday |
+|---|---|
+| **Mikser (F3) → MASTER kanali** | Yuqoridagi 4 ta "+ Master insert" slot: bosing → plagin qidiruvi (masalan "limit", "eq") |
+| **Plaginlar menyusi** | "Master insert qo'shish (mastering)..." |
+| Slotda o'ng tugma | Ochish / Bypass / O'chirish |
+
+Master zanjiri Control Room'dan oldin turadi, shuning uchun eksport (B, WAV) ga kiradi; Control Room esa faqat monitorga ta'sir qiladi.
+
 ## 0.3.0: Audio ulanishlar, FX kanallar, plagin qidiruvi
 | Yangilik | Tafsilot |
 |---|---|

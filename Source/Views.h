@@ -478,6 +478,30 @@ private:
 };
 
 // =============================================================================  Mikser
+// ---------------------------------------------------------------- Master insertlar (mastering)
+inline juce::Array<te::Plugin*> masterInserts (te::Edit& e)
+{
+    juce::Array<te::Plugin*> r;
+    for (auto p : e.getMasterPluginList().getPlugins()) if (p->getPluginType() != "azcontrolroom") r.add (p);
+    return r;
+}
+inline te::Plugin::Ptr insertMaster (AppEngine& app, const PickItem& it)
+{
+    juce::String xml; juce::PluginDescription d;
+    if (it.kind == 0) xml = builtIns[it.index].xmlType;
+    else if (it.kind == 1) xml = airwindowsPlugins[it.index].xmlType;
+    else if (it.kind == 2) { xml = te::ExternalPlugin::xmlTypeName; d = app.engine.getPluginManager().knownPluginList.getTypes()[it.index]; }
+    else return {};
+    auto p = app.edit->getPluginCache().createNewPlugin (xml, d);
+    if (p == nullptr) return {};
+    auto& list = app.edit->getMasterPluginList();
+    int idx = list.size();
+    for (int i = 0; i < list.size(); ++i) if (list.getPlugins()[i]->getPluginType() == "azcontrolroom") { idx = i; break; }
+    app.edit->getUndoManager().beginNewTransaction ("Master insert");
+    list.insertPlugin (p, idx, nullptr);
+    return p;
+}
+
 class ChannelStrip : public juce::Component
 {
 public:
@@ -525,6 +549,40 @@ public:
     }
     float level() const { return juce::jmax (lv[0], lv[1]); }
 
+    juce::Rectangle<float> masterSlot (int i) const { return { 6, 4.0f + (float) i * 14.5f, (float) getWidth() - 12, 13 }; }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (track != nullptr || app.edit == nullptr) return;
+        auto plugs = masterInserts (*app.edit);
+        for (int i = 0; i < 4; ++i)
+        {
+            if (! masterSlot (i).contains (e.position)) continue;
+            if (i < plugs.size())
+            {
+                te::Plugin::Ptr p (plugs[i]);
+                if (! e.mods.isPopupMenu()) { p->showWindowExplicitly(); return; }
+                juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
+                m.addItem (1, U ("Oynasini ochish")); m.addItem (2, p->isEnabled() ? "Bypass" : U ("Yoqish"));
+                m.addSeparator(); m.addItem (3, U ("O'chirish"));
+                juce::Component::SafePointer<ChannelStrip> sp (this);
+                m.showMenuAsync ({}, [sp, p] (int r)
+                {
+                    if (r == 1) p->showWindowExplicitly();
+                    if (r == 2) p->setEnabled (! p->isEnabled());
+                    if (r == 3) { p->edit.getUndoManager().beginNewTransaction ("Master insert"); p->deleteFromParent(); }
+                    if (sp) sp->repaint();
+                });
+            }
+            else
+            {
+                juce::Component::SafePointer<ChannelStrip> sp (this);
+                showPluginPicker (app, localAreaToGlobal (masterSlot (i).toNearestInt()), [sp, this] (const PickItem& it)
+                { if (sp == nullptr) return; if (auto p = insertMaster (app, it)) p->showWindowExplicitly(); sp->repaint(); });
+            }
+            return;
+        }
+    }
+
     void paint (juce::Graphics& g) override
     {
         using namespace juce;
@@ -546,7 +604,20 @@ public:
                 label (g, has ? pluginDisplayName (*plugs[i]) : U ("\xe2\x80\x94"), s.reduced (5, 0), 8.5f, az ? redSoft : has ? Colour (0xffa49c9e) : dim2, Justification::centredLeft, 400);
             }
         }
-        else caps (g, "STEREO OUT", { 6, 8, r.getWidth() - 12, 14 }, 8.5f, redSoft, Justification::centred);
+        else
+        {
+            // MASTER INSERT slotlari (mastering zanjiri)
+            auto plugs = masterInserts (*app.edit);
+            for (int i = 0; i < 4; ++i)
+            {
+                auto s = masterSlot (i);
+                const bool has = i < plugs.size();
+                const bool add = i == plugs.size();
+                g.setColour (has ? red.withAlpha (plugs[i]->isEnabled() ? 0.16f : 0.06f) : Colours::white.withAlpha (add ? 0.05f : 0.025f)); g.fillRoundedRectangle (s, 4);
+                const String txt = has ? pluginDisplayName (*plugs[i]) : add ? U ("+ Master insert") : String::fromUTF8 ("\xe2\x80\x94");
+                label (g, txt, s.reduced (5, 0), 8.5f, has ? (plugs[i]->isEnabled() ? redSoft : dim2) : add ? silver : dim2, Justification::centredLeft, has ? 500 : 400);
+            }
+        }
         // metr
         for (int c = 0; c < 2; ++c)
         {

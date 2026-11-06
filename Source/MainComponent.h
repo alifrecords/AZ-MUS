@@ -387,7 +387,8 @@ public:
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
             case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
-            case 6: add (70, "Plagin qo'shish (tanlangan trekka)..."); add (71, "VST3 plaginlarni skanerlash va boshqarish..."); break;
+            case 6: add (70, "Plagin qo'shish (tanlangan trekka)..."); add (72, "Master insert qo'shish (mastering)..."); m.addSeparator();
+                    add (71, "VST3 plaginlarni skanerlash va boshqarish..."); break;
             case 7: { juce::PopupMenu::Item a ("O'zbekcha"); a.itemID = 80; a.isTicked = lang == 0; m.addItem (std::move (a));
                       juce::PopupMenu::Item b (juce::String::fromUTF8 ("Русский")); b.itemID = 81; b.isTicked = lang == 1; m.addItem (std::move (b));
                       juce::PopupMenu::Item c ("English"); c.itemID = 82; c.isTicked = lang == 2; m.addItem (std::move (c)); break; }
@@ -438,6 +439,10 @@ public:
                          { if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (auto p = insertPicked (app, *at, it)) p->showWindowExplicitly(); inspector.refresh(); mixer.rebuild(); });
                      } break;
             case 71: showPluginManager(); break;
+            case 72: if (! showMixer) togglePanel (2);
+                     showPluginPicker (app, localAreaToGlobal (getLocalBounds().withSizeKeepingCentre (10, 10)), [this] (const PickItem& it)
+                     { if (auto p = insertMaster (app, it)) p->showWindowExplicitly(); mixer.repaint(); });
+                     break;
             case 80: case 81: case 82: setLanguage (id - 80); break;
             case 90: showShortcuts(); break;
             case 91: showAbout(); break;
