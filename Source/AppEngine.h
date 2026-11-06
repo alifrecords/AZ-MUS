@@ -127,13 +127,18 @@ inline void registerAzPlugins (te::Engine&);
 // Eksport/bounce paytida Control Room (monitor sozlamalari) miksga ta'sir qilmasin
 struct ScopedControlRoomBypass
 {
+    // Control Room va undan keyingi barcha plaginlar (Monitor Match, CR insertlar) — faqat monitor uchun
     explicit ScopedControlRoomBypass (te::Edit& e)
     {
+        bool after = false;
         for (auto p : e.getMasterPluginList().getPlugins())
-            if (p->getPluginType() == "azcontrolroom") { plugin = p; was = p->isEnabled(); p->setEnabled (false); }
+        {
+            if (p->getPluginType() == "azcontrolroom") after = true;
+            if (after) { plugins.add (p); was.add (p->isEnabled()); p->setEnabled (false); }
+        }
     }
-    ~ScopedControlRoomBypass() { if (plugin) plugin->setEnabled (was); }
-    te::Plugin::Ptr plugin; bool was = true;
+    ~ScopedControlRoomBypass() { for (int i = 0; i < plugins.size(); ++i) plugins[i]->setEnabled (was[i]); }
+    juce::ReferenceCountedArray<te::Plugin> plugins; juce::Array<bool> was;
 };
 
 // =============================================================================
@@ -152,6 +157,7 @@ public:
         engine.getPropertyStorage().getAppCacheFolder().createDirectory();
         engine.getPluginManager().initialiseAirWindows();
         registerAzPlugins (engine);
+        te::setDefaultPanLaw (te::PanLaw2point5dBCenter);   // Pro Tools kabi: -2.5 dB markaz
         startTimer (60 * 1000);   // avto-saqlash
     }
 
@@ -175,6 +181,7 @@ public:
         f.getParentDirectory().createDirectory();
         setEdit (te::createEmptyEdit (engine, f), f);
         for (auto* t : te::getAudioTracks (*edit)) edit->deleteTrack (t);
+        if (auto mv = edit->getMasterVolumePlugin()) mv->setVolumeDb (0.0f);   // Pro Tools kabi: master 0 dB (unity)
         auto& ts = edit->tempoSequence;
         ts.getTempo (0)->setBpm (120.0);
         // standart: 2 audio + 1 instrument trek
@@ -228,7 +235,7 @@ public:
         return ok;
     }
 
-    bool exportWav (const juce::File& out)
+    bool exportWav (const juce::File& out, int bits = 24)
     {
         if (edit == nullptr) return false;
         edit->getTransport().stop (false, true);
@@ -238,7 +245,8 @@ public:
         te::Renderer::Parameters r (*edit);
         r.destFile = out;
         r.audioFormat = engine.getAudioFileFormatManager().getWavFormat();
-        r.bitDepth = 24;
+        r.bitDepth = bits == 32 ? 32 : 24;
+        r.ditheringEnabled = bits != 32;        // 24-bit: TPDF dither (kvantlash shovqini o'rniga tekis shovqin)
         r.sampleRateForAudio = dm.getSampleRate() > 7000 ? dm.getSampleRate() : 48000.0;   // qurilma yo'q bo'lsa ham ishlaydi
         r.blockSizeForAudio  = dm.getBlockSize() > 0 ? dm.getBlockSize() : 512;
         r.time = { 0s, te::TimePosition() + len + 2s };                                     // +2 s reverb dumi
@@ -365,7 +373,7 @@ public:
             const auto name = (cl.size() == 1 ? cl[0]->getName() : t->getName()) + " (bounce)";
             const auto file = dir.getNonexistentChildFile (juce::File::createLegalFileName (name), ".wav");
             te::Renderer::Parameters r (*edit);
-            r.destFile = file; r.audioFormat = engine.getAudioFileFormatManager().getWavFormat(); r.bitDepth = 24;
+            r.destFile = file; r.audioFormat = engine.getAudioFileFormatManager().getWavFormat(); r.bitDepth = 32;   // bounce: 32-bit float, headroom yo'qolmaydi
             r.sampleRateForAudio = dm.getSampleRate() > 7000 ? dm.getSampleRate() : 48000.0;
             r.blockSizeForAudio  = dm.getBlockSize() > 0 ? dm.getBlockSize() : 512;
             r.time = { a, b };

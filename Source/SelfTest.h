@@ -3,6 +3,7 @@
 // =============================================================================
 #pragma once
 #include "AppEngine.h"
+#include "Routing.h"
 using az::U;
 
 namespace testgen
@@ -320,6 +321,60 @@ inline int runSelfTest (const juce::StringArray& args)
         check (diff / (float) b.getNumSamples() > 1.0e-4f, "Stereo maydon bor (reverb ishlagan)");
     }
     else check (false, "Mixdown faylini o'qish");
+
+    // Pro Tools uslubi: master 0 dB, pan law -2.5 dB
+    {
+        auto a4 = std::make_unique<az::AppEngine>(); a4->newProject (dir.getChildFile ("pt.azmus"));
+        check (std::abs (a4->edit->getMasterVolumePlugin()->getVolumeDb()) < 0.05f && te::getDefaultPanLaw() == te::PanLaw2point5dBCenter,
+               "Pro Tools uslubi: master 0 dB (unity), pan law -2.5 dB");
+    }
+
+    // Control Room · Monitor Match: monitorda ishlaydi, eksportga TUSHMAYDI
+    {
+        auto rmsOf = [&fm] (const juce::File& file)
+        {
+            std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (file));
+            if (! r) return -200.0f;
+            juce::AudioBuffer<float> b ((int) r->numChannels, (int) r->lengthInSamples);
+            r->read (&b, 0, (int) r->lengthInSamples, 0, true, true);
+            return juce::Decibels::gainToDecibels (b.getRMSLevel (0, 0, b.getNumSamples()), -200.0f);
+        };
+        const auto outB = dir.getChildFile ("mixdown_b.wav");
+        app2->exportWav (outB);
+        const float base = rmsOf (outB);
+        std::printf ("       takroriy eksport farqi: %.3f dB\n", base - rmsOf (out));
+        az::Routing rt (*app2);
+        auto* mmp = rt.monitorMatch (true);
+        if (mmp) { mmp->source = 0; mmp->target = 7; }   // KRK Rokit 6 → Smartfon (eng keskin farq)
+        auto inCR = az::Routing::controlRoomInserts (*app2->edit);
+        check (mmp != nullptr && inCR.size() == 1 && az::masterInserts (*app2->edit).size() == 1,
+               "Monitor Match Control Room zanjirida (Master'dan keyin, alohida)");
+        const auto out2 = dir.getChildFile ("mixdown_cr.wav");
+        app2->exportWav (out2);
+        const float withCR = rmsOf (out2);
+        std::printf ("       eksport RMS: %.2f dB (Monitor Match yoqiq: %.2f dB)\n", base, withCR);
+        check (std::abs (withCR - base) < 0.05f, "Monitor Match eksport/mixdown'ga ta'sir qilmaydi (faqat monitor)");
+
+        // DSP haqiqatan ishlaydimi: vaqtincha master insert sifatida render qilamiz
+        auto p = app2->edit->getPluginCache().createNewPlugin (az::MonitorMatchPlugin::xmlTypeName, {});
+        if (auto* tm = dynamic_cast<az::MonitorMatchPlugin*> (p.get())) { tm->source = 0; tm->target = 7; }
+        app2->edit->getMasterPluginList().insertPlugin (p, 0, nullptr);
+        const auto out3 = dir.getChildFile ("mixdown_mm.wav");
+        app2->exportWav (out3);
+        const float dsp = rmsOf (out3);
+        std::printf ("       Monitor Match DSP (KRK 6 → Smartfon) render: %.2f dB\n", dsp);
+        check (std::abs (dsp - base) > 1.0f && dsp > -60.0f, "Monitor Match DSP ovozni o'zgartiradi (KRK 6 → Smartfon)");
+        p->deleteFromParent();
+        app2->saveIfPossible();
+        auto a5 = std::make_unique<az::AppEngine>(); a5->openProject (f);
+        auto* m5 = az::Routing (*a5).monitorMatch (false);
+        check (m5 != nullptr && m5->target.get() == 7, "Monitor Match sozlamalari loyiha bilan saqlanadi");
+        // 32-bit float eksport
+        const auto out4 = dir.getChildFile ("mixdown32.wav");
+        a5->exportWav (out4, 32);
+        std::unique_ptr<juce::AudioFormatReader> r4 (fm.createReaderFor (out4));
+        check (r4 && r4->bitsPerSample == 32 && r4->usesFloatingPointData, "WAV 32-bit float eksport");
+    }
 
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);

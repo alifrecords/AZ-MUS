@@ -6,6 +6,24 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.4.0: Control Room · Monitor Match · Pro Tools uslubidagi yakuniy natija
+![Control Room](docs/control_room.png)
+
+**Control Room kanali** (Mikser F3, MASTER yonida) faqat monitorlarga boradi; eksport, bounce va mixdown'ga hech qachon tushmaydi.
+
+| Bo'lim | Nima qiladi |
+|---|---|
+| **Monitor Match** | Sizning monitoringizni (manba) boshqa monitorga (maqsad) aylantiradi. Kechikishsiz minimum-phase FIR |
+| Manba (12 ta) | KRK Rokit 5/6/8 G4, ADAM A8X, T5V, T7V, Yamaha HS5, JBL 305P MkII, PreSonus Eris E5, M-Audio BX5 D3, Mackie CR4-X, Behringer B2030A, **yoki o'z o'lchovingiz (REW)** |
+| Maqsad (9 ta) | Genelec 8340A, Focal Shape 65, Neumann KH 310, Yamaha HS8, NS-10M, Flat, Auratone 5C, Smartfon, Avtomobil |
+| % emulyatsiya | Korreksiya kuchi; egri chiziq kanalda ko'rinadi |
+| 2 × CR insert | Istalgan VST3 (masalan, tashqi Monitor Match yoki Sonarworks) faqat monitor yo'lida |
+| Level · DIM · MONO · MUTE | Monitor boshqaruvi |
+
+Ichki profillar ishlab chiqaruvchi grafiklari asosidagi **taxminiy** egri chiziqlar: xonani bilmaydi. Aniq natija uchun REW + o'lchov mikrofoni bilan tinglash nuqtasida o'lchang va Plaginlar → "Monitor Match: monitor o'lchov faylini yuklash (REW)..." orqali yuklang.
+
+**Pro Tools uslubi:** master fader yangi loyihada 0 dB (unity, avval −3 dB edi), pan law −2.5 dB markaz, mixdown 24-bit + TPDF dither yoki 32-bit float (Fayl menyusi), bounce 32-bit float (headroom yo'qolmaydi).
+
 ## 0.3.1: Master insert (mastering zanjiri)
 | Qayerda | Qanday |
 |---|---|

@@ -261,6 +261,7 @@ private:
                 if (! (arg.existsAsFile() && app->openProject (arg)) && ! (last.existsAsFile() && app->openProject (last)))
                     app->newProject();
                 if (args.contains ("--demo")) makeDemo (*app);
+                if (args.contains ("--mm")) if (auto* m = az::Routing (*app).monitorMatch (true)) { m->source = 1; m->target = 0; }   // test: A8X → Focal
                 mainWindow = std::make_unique<MainWindow> (*app);
                 if (args.contains ("--size"))   // test: oyna o'lchami (masalan 1366x768)
                 {

@@ -482,17 +482,31 @@ private:
 inline juce::Array<te::Plugin*> masterInserts (te::Edit& e)
 {
     juce::Array<te::Plugin*> r;
-    for (auto p : e.getMasterPluginList().getPlugins()) if (p->getPluginType() != "azcontrolroom") r.add (p);
+    for (auto p : e.getMasterPluginList().getPlugins()) { if (p->getPluginType() == "azcontrolroom") break; r.add (p); }
     return r;
 }
-inline te::Plugin::Ptr insertMaster (AppEngine& app, const PickItem& it)
+inline te::Plugin::Ptr createPicked (AppEngine& app, const PickItem& it)
 {
     juce::String xml; juce::PluginDescription d;
     if (it.kind == 0) xml = builtIns[it.index].xmlType;
     else if (it.kind == 1) xml = airwindowsPlugins[it.index].xmlType;
     else if (it.kind == 2) { xml = te::ExternalPlugin::xmlTypeName; d = app.engine.getPluginManager().knownPluginList.getTypes()[it.index]; }
     else return {};
-    auto p = app.edit->getPluginCache().createNewPlugin (xml, d);
+    return app.edit->getPluginCache().createNewPlugin (xml, d);
+}
+// Control Room insert: CR'dan keyin (faqat monitor, eksportga tushmaydi)
+inline te::Plugin::Ptr insertControlRoom (AppEngine& app, const PickItem& it)
+{
+    Routing (app).controlRoom();
+    auto p = createPicked (app, it);
+    if (p == nullptr) return {};
+    app.edit->getUndoManager().beginNewTransaction ("Control Room insert");
+    app.edit->getMasterPluginList().insertPlugin (p, -1, nullptr);
+    return p;
+}
+inline te::Plugin::Ptr insertMaster (AppEngine& app, const PickItem& it)
+{
+    auto p = createPicked (app, it);
     if (p == nullptr) return {};
     auto& list = app.edit->getMasterPluginList();
     int idx = list.size();
@@ -638,6 +652,184 @@ private:
     float lv[2] {};
 };
 
+
+// =============================================================================  Control Room kanali
+// Masterdan keyin, faqat monitorlarga: Monitor Match (monitor modeli emulyatsiyasi),
+// 2 ta CR insert (masalan, tashqi Monitor Match VST3 yoki Sonarworks), balandlik, Dim, Mono, Mute.
+class ControlRoomStrip : public juce::Component
+{
+public:
+    explicit ControlRoomStrip (AppEngine& a) : app (a), rt (a)
+    {
+        for (auto* b : { &mmOn, &dimB, &monoB, &muteB }) { addAndMakeVisible (b); b->setClickingTogglesState (true); b->getProperties().set ("radius", 5.0f); }
+        mmOn.setButtonText ("MONITOR MATCH"); dimB.setButtonText ("DIM"); monoB.setButtonText ("MONO"); muteB.setButtonText ("MUTE");
+        mmOn.setColour (juce::TextButton::buttonOnColourId, cyan.withAlpha (0.35f));
+        dimB.setColour (juce::TextButton::buttonOnColourId, yellow.withAlpha (0.35f));
+        monoB.setColour (juce::TextButton::buttonOnColourId, blue.withAlpha (0.35f));
+        muteB.setColour (juce::TextButton::buttonOnColourId, red.withAlpha (0.45f));
+        addAndMakeVisible (src); addAndMakeVisible (tgt); addAndMakeVisible (amt); addAndMakeVisible (lvl);
+        src.setTooltip (U ("Sizning monitoringiz (manba)")); tgt.setTooltip (U ("Qaysi monitorda eshitmoqchisiz (maqsad)"));
+        for (int i = 0; i < (int) mm::sourceProfiles().size(); ++i) src.addItem (MonitorMatchPlugin::sourceName (i), i + 1);
+        src.addSeparator(); src.addItem (U ("O'lchov fayli (REW)..."), 1000);
+        for (int i = 0; i < (int) mm::targetProfiles().size(); ++i) tgt.addItem (MonitorMatchPlugin::targetName (i), i + 1);
+        amt.setSliderStyle (juce::Slider::LinearBar); amt.setRange (0, 100, 1); amt.setTextValueSuffix (U ("% emulyatsiya"));
+        amt.setColour (juce::Slider::trackColourId, cyan.withAlpha (0.28f));
+        lvl.setSliderStyle (juce::Slider::LinearVertical); lvl.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        lvl.setRange (-60.0, 6.0, 0.1); lvl.setSkewFactorFromMidPoint (-10.0); lvl.setDoubleClickReturnValue (true, 0.0);
+        lvl.setTooltip (U ("Monitor balandligi (eksportga ta'sir qilmaydi)"));
+        refresh();
+
+        mmOn.onClick = [this]
+        {
+            auto* m = rt.monitorMatch (mmOn.getToggleState());
+            if (m) m->setEnabled (mmOn.getToggleState());
+            refresh();
+        };
+        src.onChange = [this]
+        {
+            const int id = src.getSelectedId();
+            if (id == 1000) { loadMeasurement(); return; }
+            if (auto* m = rt.monitorMatch (true)) { m->source = id - 1; m->setEnabled (true); }
+            refresh();
+        };
+        tgt.onChange = [this] { if (auto* m = rt.monitorMatch (true)) { m->target = tgt.getSelectedId() - 1; m->setEnabled (true); } refresh(); };
+        amt.onValueChange = [this] { if (auto* m = rt.monitorMatch (false)) m->amount = (float) amt.getValue() / 100.0f; repaint(); };
+        lvl.onValueChange = [this] { if (auto* c = rt.controlRoom()) c->level = (float) lvl.getValue(); repaint(); };
+        dimB.onClick  = [this] { if (auto* c = rt.controlRoom()) c->dim  = dimB.getToggleState(); };
+        monoB.onClick = [this] { if (auto* c = rt.controlRoom()) c->mono = monoB.getToggleState(); };
+        muteB.onClick = [this] { if (auto* c = rt.controlRoom()) c->mute = muteB.getToggleState(); };
+    }
+
+    void refresh()
+    {
+        if (! app.edit) return;
+        auto* c = rt.controlRoom();
+        if (c) { lvl.setValue (c->level.get(), juce::dontSendNotification); dimB.setToggleState (c->dim.get(), juce::dontSendNotification);
+                 monoB.setToggleState (c->mono.get(), juce::dontSendNotification); muteB.setToggleState (c->mute.get(), juce::dontSendNotification); }
+        auto* m = rt.monitorMatch (false);
+        const bool on = m != nullptr && m->isEnabled();
+        mmOn.setToggleState (on, juce::dontSendNotification);
+        src.setSelectedId (m ? (m->source.get() >= (int) mm::sourceProfiles().size() ? 1000 : m->source.get() + 1) : 1, juce::dontSendNotification);
+        if (m && m->source.get() >= (int) mm::sourceProfiles().size())
+            src.setText (U ("O'lchov: ") + m->customName.get(), juce::dontSendNotification);
+        tgt.setSelectedId (m ? m->target.get() + 1 : 2, juce::dontSendNotification);
+        amt.setValue (m ? m->amount.get() * 100.0 : 100.0, juce::dontSendNotification);
+        for (auto* w : std::initializer_list<juce::Component*> { &src, &tgt, &amt }) w->setAlpha (on ? 1.0f : 0.55f);
+        repaint();
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (8, 6);
+        auto right = r.removeFromRight (64);
+        r.removeFromRight (6);
+        r.removeFromTop (16);
+        mmOn.setBounds (r.removeFromTop (20)); r.removeFromTop (4);
+        src.setBounds (r.removeFromTop (20)); r.removeFromTop (3);
+        tgt.setBounds (r.removeFromTop (20)); r.removeFromTop (3);
+        amt.setBounds (r.removeFromTop (16)); r.removeFromTop (4);
+        slotArea = r.removeFromTop (34).toFloat();
+        curveArea = r.removeFromTop (juce::jmax (0, r.getHeight() - 2)).toFloat();
+        auto bt = right.removeFromBottom (3 * 18);
+        lvl.setBounds (right.withTrimmedTop (16).withTrimmedBottom (18).withSizeKeepingCentre (30, right.getHeight() - 34));
+        dimB.setBounds (bt.removeFromTop (18).reduced (0, 1)); monoB.setBounds (bt.removeFromTop (18).reduced (0, 1)); muteB.setBounds (bt.removeFromTop (18).reduced (0, 1));
+    }
+
+    juce::Rectangle<float> crSlot (int i) const { return { slotArea.getX(), slotArea.getY() + (float) i * 17.0f, slotArea.getWidth(), 15.0f }; }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! app.edit) return;
+        juce::Array<te::Plugin*> plugs;
+        for (auto p : Routing::controlRoomInserts (*app.edit)) if (p->getPluginType() != MonitorMatchPlugin::xmlTypeName) plugs.add (p);
+        for (int i = 0; i < 2; ++i)
+        {
+            if (! crSlot (i).contains (e.position)) continue;
+            juce::Component::SafePointer<ControlRoomStrip> sp (this);
+            if (i < plugs.size())
+            {
+                te::Plugin::Ptr p (plugs[i]);
+                if (! e.mods.isPopupMenu()) { p->showWindowExplicitly(); return; }
+                juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
+                m.addItem (1, U ("Oynasini ochish")); m.addItem (2, p->isEnabled() ? "Bypass" : U ("Yoqish"));
+                m.addSeparator(); m.addItem (3, U ("O'chirish"));
+                m.showMenuAsync ({}, [sp, p] (int r)
+                {
+                    if (r == 1) p->showWindowExplicitly();
+                    if (r == 2) p->setEnabled (! p->isEnabled());
+                    if (r == 3) { p->edit.getUndoManager().beginNewTransaction ("Control Room insert"); p->deleteFromParent(); }
+                    if (sp) sp->repaint();
+                });
+            }
+            else
+                showPluginPicker (app, localAreaToGlobal (crSlot (i).toNearestInt()), [sp, this] (const PickItem& it)
+                { if (sp == nullptr) return; if (auto p = insertControlRoom (app, it)) p->showWindowExplicitly(); sp->repaint(); });
+            return;
+        }
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        using namespace juce;
+        auto r = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (cyan.withAlpha (0.035f)); g.fillRoundedRectangle (r, 10);
+        g.setColour (cyan.withAlpha (0.3f)); g.drawRoundedRectangle (r, 10, 1);
+        caps (g, "CONTROL ROOM", { 10, 5, r.getWidth() - 90, 12 }, 9.5f, cyan);
+        label (g, String (lvl.getValue(), 1) + " dB", { r.getRight() - 72, 4, 64, 12 }, 9, silver, Justification::centred, 500);
+        // CR insertlar
+        juce::Array<te::Plugin*> plugs;
+        if (app.edit) for (auto p : Routing::controlRoomInserts (*app.edit)) if (p->getPluginType() != MonitorMatchPlugin::xmlTypeName) plugs.add (p);
+        for (int i = 0; i < 2; ++i)
+        {
+            auto s = crSlot (i);
+            const bool has = i < plugs.size(), add = i == plugs.size();
+            g.setColour (has ? cyan.withAlpha (plugs[i]->isEnabled() ? 0.16f : 0.06f) : Colours::white.withAlpha (add ? 0.05f : 0.025f)); g.fillRoundedRectangle (s, 4);
+            label (g, has ? pluginDisplayName (*plugs[i]) : add ? U ("+ CR insert (faqat monitor)") : String::fromUTF8 ("\xe2\x80\x94"),
+                   s.reduced (5, 0), 8.5f, has ? (plugs[i]->isEnabled() ? cyan : dim2) : add ? silver : dim2, Justification::centredLeft, has ? 500 : 400);
+        }
+        // korreksiya egri chizig'i (20 Hz – 20 kHz, ±12 dB)
+        if (curveArea.getHeight() > 18)
+        {
+            auto c = curveArea.reduced (1);
+            g.setColour (Colours::white.withAlpha (0.03f)); g.fillRoundedRectangle (c, 4);
+            g.setColour (Colours::white.withAlpha (0.08f)); g.drawHorizontalLine ((int) c.getCentreY(), c.getX(), c.getRight());
+            if (auto* m = app.edit ? Routing (app).monitorMatch (false) : nullptr)
+            {
+                Path p;
+                for (int i = 0; i <= 80; ++i)
+                {
+                    const double hz = 20.0 * std::pow (1000.0, i / 80.0);
+                    const float db = (float) jlimit (-12.0, 12.0, m->correctionDbAt (hz));
+                    const float x = c.getX() + c.getWidth() * (float) i / 80.0f, y = c.getCentreY() - db / 12.0f * c.getHeight() * 0.5f;
+                    if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+                }
+                g.setColour (m->isEnabled() ? cyan : dim2); g.strokePath (p, PathStrokeType (1.4f));
+            }
+            label (g, "20", c.withTrimmedLeft (3), 7.5f, dim2, Justification::bottomLeft, 400);
+            label (g, "20k", c.withTrimmedRight (3), 7.5f, dim2, Justification::bottomRight, 400);
+        }
+    }
+private:
+    void loadMeasurement()
+    {
+        chooser = std::make_unique<juce::FileChooser> (U ("Monitor o'lchovi (REW → Export measurement as text)"), juce::File(), "*.txt;*.frd;*.csv");
+        juce::Component::SafePointer<ControlRoomStrip> sp (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [sp] (const juce::FileChooser& fc)
+        {
+            if (sp == nullptr) return;
+            if (auto f = fc.getResult(); f.existsAsFile())
+                if (auto* m = sp->rt.monitorMatch (true)) { m->loadMeasurement (f); m->setEnabled (true); }
+            sp->refresh();
+        });
+    }
+    static inline const juce::Colour cyan { 0xff4ad6ff };
+    AppEngine& app; Routing rt;
+    juce::TextButton mmOn, dimB, monoB, muteB;
+    juce::ComboBox src, tgt; juce::Slider amt, lvl;
+    juce::Rectangle<float> slotArea, curveArea;
+    std::unique_ptr<juce::FileChooser> chooser;
+};
+
 class Mixer : public juce::Component, private juce::Timer
 {
 public:
@@ -645,16 +837,18 @@ public:
     explicit Mixer (AppEngine& a) : app (a) { addAndMakeVisible (vp); vp.setViewedComponent (&holder, false); vp.setScrollBarsShown (false, true); startTimerHz (25); }
     void rebuild()
     {
-        strips.clear(); ids.clear(); master.reset();
+        strips.clear(); ids.clear(); master.reset(); croom.reset();
         if (! app.edit) return;
         for (auto* t : te::getAudioTracks (*app.edit)) { auto* s = strips.add (new ChannelStrip (app, t)); holder.addAndMakeVisible (s); ids.add (t->itemID); }
         master = std::make_unique<ChannelStrip> (app, nullptr); addAndMakeVisible (*master);
+        croom = std::make_unique<ControlRoomStrip> (app); addAndMakeVisible (*croom);
         resized();
     }
     void resized() override
     {
         auto r = getLocalBounds().reduced (10, 8);
         r.removeFromLeft (18);
+        if (croom) { croom->setBounds (r.removeFromRight (250)); r.removeFromRight (8); }
         if (master) master->setBounds (r.removeFromRight (104));
         r.removeFromRight (10);
         vp.setBounds (r);
@@ -677,6 +871,9 @@ private:
     }
     AppEngine& app; juce::Viewport vp; juce::Component holder;
     juce::OwnedArray<ChannelStrip> strips; juce::Array<te::EditItemID> ids; std::unique_ptr<ChannelStrip> master;
+    std::unique_ptr<ControlRoomStrip> croom;
+public:
+    ControlRoomStrip* controlRoomStrip() { return croom.get(); }
 };
 
 // =============================================================================  Media brauzer

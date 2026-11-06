@@ -4,6 +4,7 @@
 // =============================================================================
 #pragma once
 #include "AppEngine.h"
+#include "MonitorMatchEngine.h"
 
 namespace az
 {
@@ -55,7 +56,133 @@ private:
     float lastGain = 1.0f;
 };
 
-inline void registerAzPlugins (te::Engine& e) { e.getPluginManager().createBuiltInType<ControlRoomPlugin>(); }
+// ---------------------------------------------------------------- Monitor Match (Control Room insert)
+// Sizning monitoringiz (KRK, ADAM, Yamaha HS5, JBL ...) chastota javobini maqsad monitorga
+// (Genelec, Focal, NS-10, Auratone, smartfon, mashina ...) aylantiradi. Kechikishsiz (minimum phase) FIR.
+// Faqat Control Room zanjirida turadi: eksport/bounce'ga hech qachon tushmaydi.
+class MonitorMatchPlugin : public te::Plugin, private juce::AsyncUpdater
+{
+public:
+    static const char* getPluginName() { return "AZ Monitor Match"; }
+    static inline const char* xmlTypeName = "azmonitormatch";
+
+    explicit MonitorMatchPlugin (te::PluginCreationInfo info) : te::Plugin (info)
+    {
+        auto um = getUndoManager();
+        source.referTo (state, "mmSource", um, 0);
+        target.referTo (state, "mmTarget", um, 1);
+        amount.referTo (state, "mmAmount", um, 1.0f);
+        bass.referTo (state, "mmBass", um, 0.85f);
+        autoGain.referTo (state, "mmAutoGain", um, true);
+        custom.referTo (state, "mmCustom", um, {});
+        customName.referTo (state, "mmCustomName", um, {});
+    }
+    ~MonitorMatchPlugin() override { cancelPendingUpdate(); notifyListenersOfDeletion(); }
+
+    juce::String getName() const override                 { return getPluginName(); }
+    juce::String getPluginType() override                 { return xmlTypeName; }
+    juce::String getSelectableDescription() override      { return getName(); }
+    BusLayout getBusses() const override                  { return BusLayout::singlePassThrough(); }
+
+    void initialise (const te::PluginInitialisationInfo& info) override
+    {
+        sampleRate = info.sampleRate > 1000 ? info.sampleRate : 48000.0;
+        conv.prepare ({ sampleRate, (juce::uint32) juce::jmax (info.blockSizeSamples, 8192), 2 });
+        rebuild();
+    }
+    void deinitialise() override {}
+
+    void valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id) override
+    {
+        te::Plugin::valueTreePropertyChanged (v, id);
+        if (v == state && id.toString().startsWith ("mm")) triggerAsyncUpdate();
+    }
+
+    void applyToBuffer (const te::PluginRenderContext& fc) override
+    {
+        if (! isEnabled() || fc.destBuffer == nullptr || ! ready.load()) return;
+        juce::dsp::AudioBlock<float> block (*fc.destBuffer);
+        auto sub = block.getSubBlock ((size_t) fc.bufferStartSample, (size_t) fc.bufferNumSamples)
+                        .getSubsetChannelBlock (0, juce::jmin<size_t> (2, block.getNumChannels()));
+        conv.process (juce::dsp::ProcessContextReplacing<float> (sub));
+    }
+    void restorePluginStateFromValueTree (const juce::ValueTree& v) override
+    {
+        te::copyPropertiesToCachedValues (v, source, target, amount, bass, autoGain, custom, customName);
+        triggerAsyncUpdate();
+    }
+
+    // ---- foydalanuvchi o'lchovi (REW: File → Export → Export measurement as text)
+    bool loadMeasurement (const juce::File& f)
+    {
+        auto pts = mm::parseMeasurementText (f.loadFileAsString().toStdString());
+        if (pts.size() < 4) return false;
+        juce::String sstr;
+        for (auto& p : pts) sstr << juce::String (p.hz, 1) << ":" << juce::String (p.db, 2) << ";";
+        customName = f.getFileNameWithoutExtension();
+        custom = sstr;
+        source = (int) mm::sourceProfiles().size();
+        return true;
+    }
+    std::vector<mm::CurvePoint> customPoints() const
+    {
+        std::vector<mm::CurvePoint> r;
+        for (auto& t : juce::StringArray::fromTokens (custom.get(), ";", {}))
+            if (t.contains (":")) r.push_back ({ t.upToFirstOccurrenceOf (":", false, false).getDoubleValue(), t.fromFirstOccurrenceOf (":", false, false).getDoubleValue() });
+        return r;
+    }
+    mm::Settings settings() const
+    {
+        mm::Settings s;
+        s.source = juce::jlimit (0, (int) mm::sourceProfiles().size(), source.get());
+        s.target = juce::jlimit (0, (int) mm::targetProfiles().size() - 1, target.get());
+        s.amount = juce::jlimit (0.0f, 1.0f, amount.get()); s.bass = juce::jlimit (0.0f, 1.0f, bass.get());
+        s.minPhase = true; s.autoGain = autoGain.get();
+        return s;
+    }
+    double correctionDbAt (double hz) const { mm::CorrectionModel m; m.custom = customPoints(); return m.correctionDb (settings(), hz); }
+
+    static juce::String sourceName (int i)
+    {
+        auto& v = mm::sourceProfiles();
+        if (i >= 0 && i < (int) v.size()) return juce::String (v[(size_t) i].brand) + " " + v[(size_t) i].model;
+        return juce::String::fromUTF8 ("O'lchov fayli (REW)");
+    }
+    static juce::String targetName (int i)
+    {
+        auto& v = mm::targetProfiles(); i = juce::jlimit (0, (int) v.size() - 1, i);
+        return juce::String (v[(size_t) i].brand) + " " + v[(size_t) i].model;
+    }
+
+    juce::CachedValue<int> source, target;
+    juce::CachedValue<float> amount, bass;
+    juce::CachedValue<bool> autoGain;
+    juce::CachedValue<juce::String> custom, customName;
+    std::atomic<bool> ready { false };
+private:
+    void handleAsyncUpdate() override { rebuild(); }
+    void rebuild()
+    {
+        mm::CorrectionModel m; m.custom = customPoints();
+        auto s = settings();
+        if (s.source >= (int) mm::sourceProfiles().size() && m.custom.empty()) s.source = 0;
+        const int n = mm::firLengthFor (sampleRate);
+        const auto ir = m.buildImpulse (s, sampleRate, n);
+        juce::AudioBuffer<float> b (1, n);
+        std::copy (ir.begin(), ir.end(), b.getWritePointer (0));
+        conv.loadImpulseResponse (std::move (b), sampleRate, juce::dsp::Convolution::Stereo::no,
+                                  juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+        ready = true;
+    }
+    juce::dsp::Convolution conv { juce::dsp::Convolution::NonUniform { 512 } };
+    double sampleRate = 48000.0;
+};
+
+inline void registerAzPlugins (te::Engine& e)
+{
+    e.getPluginManager().createBuiltInType<ControlRoomPlugin>();
+    e.getPluginManager().createBuiltInType<MonitorMatchPlugin>();
+}
 
 // ---------------------------------------------------------------- tashqi qurilmalar ta'rifi
 struct ExternalDef { juce::String kind, name, out, in; };   // kind: "fx" | "inst"
@@ -75,6 +202,28 @@ struct Routing
         if (p == nullptr) return nullptr;
         app.edit->getMasterPluginList().insertPlugin (p, -1, nullptr);
         return dynamic_cast<ControlRoomPlugin*> (p.get());
+    }
+    // Control Room zanjiri: azcontrolroom'dan KEYINgi plaginlar (faqat monitor)
+    static juce::Array<te::Plugin*> controlRoomInserts (te::Edit& e)
+    {
+        juce::Array<te::Plugin*> r; bool after = false;
+        for (auto p : e.getMasterPluginList().getPlugins())
+        {
+            if (p->getPluginType() == ControlRoomPlugin::xmlTypeName) { after = true; continue; }
+            if (after) r.add (p);
+        }
+        return r;
+    }
+    MonitorMatchPlugin* monitorMatch (bool create)
+    {
+        if (! app.edit) return nullptr;
+        for (auto p : controlRoomInserts (*app.edit)) if (auto* mmp = dynamic_cast<MonitorMatchPlugin*> (p)) return mmp;
+        if (! create) return nullptr;
+        controlRoom();
+        auto p = app.edit->getPluginCache().createNewPlugin (MonitorMatchPlugin::xmlTypeName, {});
+        if (p == nullptr) return nullptr;
+        app.edit->getMasterPluginList().insertPlugin (p, -1, nullptr);   // CR'dan keyin
+        return dynamic_cast<MonitorMatchPlugin*> (p.get());
     }
 
     // ---- Group/FX kanallar

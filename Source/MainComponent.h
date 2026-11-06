@@ -376,7 +376,7 @@ public:
         {
             case 0: add (1, "Yangi loyiha", "Ctrl+N"); add (2, "Ochish...", "Ctrl+O"); m.addSeparator();
                     add (3, "Saqlash", "Ctrl+S"); add (4, "Boshqa nom bilan saqlash...", "Ctrl+Shift+S"); m.addSeparator();
-                    add (5, "Audio import...", "Ctrl+I"); add (6, "WAV'ga eksport (mixdown)...", "Ctrl+Shift+E"); m.addSeparator(); add (9, "Chiqish"); break;
+                    add (5, "Audio import...", "Ctrl+I"); add (6, "WAV'ga eksport (mixdown)...", "Ctrl+Shift+E"); add (7, "WAV 32-bit float eksport (mastering uchun)..."); m.addSeparator(); add (9, "Chiqish"); break;
             case 1: add (10, "Bekor qilish (Undo)", "Ctrl+Z"); add (11, "Qaytarish (Redo)", "Ctrl+Y"); m.addSeparator();
                     add (12, "Kursor joyida kesish", "S"); add (13, "Nusxa", "Ctrl+D"); add (14, "O'chirish", "Del"); m.addSeparator();
                     add (15, "Bounce Selection", "B"); add (16, "Locatorlar = tanlov", "P"); add (17, "Hammasini belgilash", "Ctrl+A"); m.addSeparator();
@@ -387,7 +387,7 @@ public:
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
             case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
-            case 6: add (70, "Plagin qo'shish (tanlangan trekka)..."); add (72, "Master insert qo'shish (mastering)..."); m.addSeparator();
+            case 6: add (70, "Plagin qo'shish (tanlangan trekka)..."); add (72, "Master insert qo'shish (mastering)..."); add (73, "Control Room insert qo'shish (faqat monitor)..."); add (74, "Monitor Match: monitor o'lchov faylini yuklash (REW)..."); m.addSeparator();
                     add (71, "VST3 plaginlarni skanerlash va boshqarish..."); break;
             case 7: { juce::PopupMenu::Item a ("O'zbekcha"); a.itemID = 80; a.isTicked = lang == 0; m.addItem (std::move (a));
                       juce::PopupMenu::Item b (juce::String::fromUTF8 ("Русский")); b.itemID = 81; b.isTicked = lang == 1; m.addItem (std::move (b));
@@ -407,6 +407,7 @@ public:
             case 4: chooseFile (U ("Boshqa nom bilan saqlash"), "*.azmus", true, [this] (juce::File f) { app.saveAs (f); editChanged(); }); break;
             case 5: chooseFile (U ("Audio import"), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg", false, [this] (juce::File f) { insertFileAtCursor (f); }); break;
             case 6: exportMix(); break;
+            case 7: exportMix (32); break;
             case 9: juce::JUCEApplication::getInstance()->systemRequestedQuit(); break;
             case 10: if (app.edit) app.edit->getUndoManager().undo(); break;
             case 11: if (app.edit) app.edit->getUndoManager().redo(); break;
@@ -443,6 +444,17 @@ public:
                      showPluginPicker (app, localAreaToGlobal (getLocalBounds().withSizeKeepingCentre (10, 10)), [this] (const PickItem& it)
                      { if (auto p = insertMaster (app, it)) p->showWindowExplicitly(); mixer.repaint(); });
                      break;
+            case 73: if (! showMixer) togglePanel (2);
+                     showPluginPicker (app, localAreaToGlobal (getLocalBounds().withSizeKeepingCentre (10, 10)), [this] (const PickItem& it)
+                     { if (auto p = insertControlRoom (app, it)) p->showWindowExplicitly(); mixer.rebuild(); });
+                     break;
+            case 74: chooseFile (U ("Monitor o'lchovi (REW → Export measurement as text)"), "*.txt;*.frd;*.csv", false, [this] (juce::File f)
+                     {
+                         auto* mmp = Routing (app).monitorMatch (true);
+                         const bool ok = mmp != nullptr && mmp->loadMeasurement (f);
+                         toast (ok ? U ("Monitor Match: o'lchov yuklandi — ") + f.getFileName() : U ("O'lchov faylini o'qib bo'lmadi"));
+                         mixer.rebuild();
+                     }); break;
             case 80: case 81: case 82: setLanguage (id - 80); break;
             case 90: showShortcuts(); break;
             case 91: showAbout(); break;
@@ -496,11 +508,11 @@ public:
     {
         pianoRoll = std::make_unique<PianoRollWindow> (c, [this] { juce::MessageManager::callAsync ([this] { pianoRoll.reset(); lanes.repaint(); }); });
     }
-    void exportMix()
+    void exportMix (int bits = 24)
     {
-        chooseFile (U ("WAV'ga eksport"), "*.wav", true, [this] (juce::File f)
+        chooseFile (U ("WAV'ga eksport"), "*.wav", true, [this, bits] (juce::File f)
         {
-            const bool ok = app.exportWav (f.withFileExtension ("wav"));
+            const bool ok = app.exportWav (f.withFileExtension ("wav"), bits);
             juce::AlertWindow::showMessageBoxAsync (ok ? juce::MessageBoxIconType::InfoIcon : juce::MessageBoxIconType::WarningIcon, "AZ MUS",
                                                     ok ? U ("Eksport tayyor:") + "\n" + f.withFileExtension ("wav").getFullPathName() : U ("Eksport qilib bo'lmadi (loyiha bo'sh?)"));
         });

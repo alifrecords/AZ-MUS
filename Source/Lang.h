@@ -19,6 +19,20 @@ struct TrEntry { const char8_t* uz; const char8_t* ru; const char8_t* en; };
 inline juce::String tr (const juce::String& s)
 {
     static const TrEntry entries[] = {
+        { u8"Sizning monitoringiz (manba)", u8"Ваши мониторы (источник)", u8"Your monitors (source)" },
+        { u8"Qaysi monitorda eshitmoqchisiz (maqsad)", u8"На каких мониторах слушать (цель)", u8"Monitors to emulate (target)" },
+        { u8"O'lchov fayli (REW)...", u8"Файл измерения (REW)...", u8"Measurement file (REW)..." },
+        { u8"O'lchov fayli (REW)", u8"Файл измерения (REW)", u8"Measurement file (REW)" },
+        { u8"O'lchov: ", u8"Измерение: ", u8"Measurement: " },
+        { u8"% emulyatsiya", u8"% эмуляции", u8"% emulation" },
+        { u8"Monitor balandligi (eksportga ta'sir qilmaydi)", u8"Громкость мониторов (не влияет на экспорт)", u8"Monitor level (does not affect export)" },
+        { u8"+ CR insert (faqat monitor)", u8"+ CR-инсерт (только мониторы)", u8"+ CR insert (monitors only)" },
+        { u8"Monitor o'lchovi (REW → Export measurement as text)", u8"Измерение мониторов (REW → Export measurement as text)", u8"Monitor measurement (REW → Export measurement as text)" },
+        { u8"WAV 32-bit float eksport (mastering uchun)...", u8"Экспорт WAV 32-bit float (для мастеринга)...", u8"Export WAV 32-bit float (for mastering)..." },
+        { u8"Control Room insert qo'shish (faqat monitor)...", u8"Добавить инсерт Control Room (только мониторы)...", u8"Add Control Room insert (monitors only)..." },
+        { u8"Monitor Match: monitor o'lchov faylini yuklash (REW)...", u8"Monitor Match: загрузить измерение мониторов (REW)...", u8"Monitor Match: load monitor measurement (REW)..." },
+        { u8"Monitor Match: o'lchov yuklandi — ", u8"Monitor Match: измерение загружено — ", u8"Monitor Match: measurement loaded — " },
+        { u8"O'lchov faylini o'qib bo'lmadi", u8"Не удалось прочитать файл измерения", u8"Could not read the measurement file" },
         { u8"+ Master insert", u8"+ Мастер-инсерт", u8"+ Master insert" },
         { u8"Master insert qo'shish (mastering)...", u8"Добавить мастер-инсерт (мастеринг)...", u8"Add master insert (mastering)..." },
         { u8"\n\nQayta urinish: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist", u8"\n\nПовторить: Плагины → Сканирование VST3 плагинов → Options → Clear blacklist", u8"\n\nRetry: Plugins → Scan VST3 plugins → Options → Clear blacklist" },
