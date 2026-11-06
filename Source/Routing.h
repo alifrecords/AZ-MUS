@@ -5,6 +5,7 @@
 #pragma once
 #include "AppEngine.h"
 #include "MonitorMatchEngine.h"
+#include "Beat.h"
 
 namespace az
 {
@@ -182,6 +183,25 @@ inline void registerAzPlugins (te::Engine& e)
 {
     e.getPluginManager().createBuiltInType<ControlRoomPlugin>();
     e.getPluginManager().createBuiltInType<MonitorMatchPlugin>();
+    e.getPluginManager().createBuiltInType<AzBeatPlugin>();
+}
+
+// AZ BEAT treki: standart kit va boshlang'ich pattern bilan
+inline te::AudioTrack* addBeatTrack (AppEngine& app)
+{
+    if (! app.edit) return nullptr;
+    auto* t = app.addAudioTrack ("AZ BEAT");
+    if (t == nullptr) return nullptr;
+    t->setColour (juce::Colour (0xffff9a4a));
+    auto p = app.edit->getPluginCache().createNewPlugin (AzBeatPlugin::xmlTypeName, {});
+    if (auto* bp = dynamic_cast<AzBeatPlugin*> (p.get())) bp->loadDefaultKit (true);
+    if (p) t->pluginList.insertPlugin (p, 0, nullptr);
+    return t;
+}
+inline AzBeatPlugin* beatPluginOf (te::AudioTrack& t)
+{
+    for (auto p : t.pluginList.getPlugins()) if (auto* b = dynamic_cast<AzBeatPlugin*> (p)) return b;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------- tashqi qurilmalar ta'rifi

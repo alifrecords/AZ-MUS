@@ -50,9 +50,10 @@ inline const KeyHelp keyHelp[] = {
     { "Q",                    "Quantize (tanlangan kliplar / MIDI notalar)" },
     { "Ctrl+Alt+B",           "Render Selection (Dry / Channel / Complete Signal Path)" },
     { "Mikser \xe2\x86\x97 / chetidan sudrash", "Mikserni alohida oynaga ajratish" },
+    { "Alt (bosib turish)",   "Qaychi: bosilgan joyda kesish, sudrash \xe2\x80\x94 nusxa (Cubase)" },
 };
 
-class MainComponent : public juce::Component, public juce::MenuBarModel, private juce::ChangeListener, private juce::Timer
+class MainComponent : public juce::Component, public juce::MenuBarModel, public juce::DragAndDropContainer, private juce::ChangeListener, private juce::Timer
 {
 public:
     explicit MainComponent (AppEngine& a)
@@ -106,6 +107,9 @@ public:
         lanes.onBounce = [this] { bounce(); };
         lanes.onQuantize = [this] { quantizeSelected(); };
         mixer.onDetach = [this] { toggleMixerWindow(); };
+        mixer.onRoutingChanged = [this] { inspector.refresh(); headers.repaint(); lanes.repaint(); };
+        headers.onAddTrack = [this] { showAddTrackMenu(); };
+        lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); };
 
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
         showInsp = pf.getBoolValue ("azShowInsp", true); showMedia = pf.getBoolValue ("azShowMedia", true); showMixer = pf.getBoolValue ("azShowMixer", true);
@@ -251,7 +255,7 @@ public:
         if (! mixerWindow)
         {
             mixer.setVisible (showMixer);
-            if (showMixer) mixer.setBounds (r.removeFromBottom (juce::jlimit (180, 236, getHeight() * 3 / 10)));
+            if (showMixer) mixer.setBounds (r.removeFromBottom (juce::jlimit (236, 300, getHeight() * 34 / 100)));
         }
         if (showInsp) inspector.setBounds (r.removeFromLeft (236));
         if (showMedia) media.setBounds (r.removeFromRight (260));
@@ -605,6 +609,7 @@ public:
         juce::PopupMenu m;
         m.addItem (1, U ("Audio trek (vokal, gitara, sample)"));
         m.addItem (2, U ("Instrument trek (AZ Synth)"));
+        m.addItem (3, U ("AZ BEAT \xe2\x80\x94 beat yaratish (padlar + sekvenser)"));
         juce::PopupMenu vi; auto types = app.engine.getPluginManager().knownPluginList.getTypes();
         for (int i = 0; i < types.size(); ++i) if (types[i].isInstrument) vi.addItem (100 + i, types[i].name);
         m.addSubMenu (U ("Instrument trek (VST3i)"), vi, vi.getNumItems() > 0);
@@ -612,8 +617,20 @@ public:
         {
             if (r == 1) addTrack (false);
             if (r == 2) addTrack (true);
+            if (r == 3) addBeat();
             if (r >= 100) { app.edit->getUndoManager().beginNewTransaction ("Trek"); auto d = types[r - 100]; if (auto* t = app.addInstrumentTrack (d.name, &d)) selectTrack (t); }
         });
+    }
+    void addBeat()
+    {
+        if (! app.edit) return;
+        app.edit->getUndoManager().beginNewTransaction ("AZ BEAT");
+        if (auto* t = addBeatTrack (app))
+        {
+            selectTrack (t); mixer.rebuild();
+            if (auto* bp = beatPluginOf (*t)) bp->showWindowExplicitly();
+            toast (U ("AZ BEAT: padlarga sample sudrab tashlang, sekvenserda bosing \xe2\x80\x94 Play"));
+        }
     }
     void addTrack (bool instrument)
     {
@@ -637,7 +654,8 @@ public:
         if (t == nullptr || (midi != AppEngine::isInstrumentTrack (*t) && t->getClips().size() > 0))
             t = midi ? app.addInstrumentTrack (f.getFileNameWithoutExtension()) : app.addAudioTrack (f.getFileNameWithoutExtension());
         const auto at = app.edit->getTransport().getPosition();
-        if (midi) app.importMidi (*t, f, at); else app.importAudio (*t, f, at);
+        if (midi) app.importMidi (*t, f, at);
+        else if (auto c = app.importAudio (*t, f, at)) { if (auto m = media.applySync (*c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); }
         selectTrack (t);
     }
     void openPianoRoll (te::MidiClip& c)

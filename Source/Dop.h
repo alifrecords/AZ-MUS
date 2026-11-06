@@ -492,7 +492,7 @@ public:
         p.setProperty ("auto", true, um());
         double tgt = 0;
         dop::setPoints (p, dop::autoEnvelope (source, sr, dop::clipRegion (*c), p["target"], p["range"], p["speed"], &tgt), um());
-        autoInfo = U ("AUTO: maqsad ") + juce::String (tgt, 1) + " dBFS RMS \xc2\xb7 " + juce::String ((int) dop::points (p).size()) + U (" nuqta. Qo'lda to'g'rilash mumkin.");
+        autoInfo = U ("AUTO: maqsad ") + juce::String (tgt, 1) + juce::String::fromUTF8 (" dBFS RMS \xc2\xb7 ") + juce::String ((int) dop::points (p).size()) + U (" nuqta. Qo'lda to'g'rilash mumkin.");
         env.repaint(); changed(); repaint();
     }
     void changed()

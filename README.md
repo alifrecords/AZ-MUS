@@ -6,6 +6,19 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.6.0: AZ BEAT · mikserda Insert/Send · sample sinxroni · Alt-qaychi
+![AZ BEAT](docs/az_beat.png)
+
+| Funksiya | Qayerda | Nima qiladi |
+|---|---|---|
+| **AZ BEAT** treki | "+" → "AZ BEAT", yoki trek sarlavhasini 2x bosish | **Battery** tuzilmasi: 4×4 pad (C1–D#2), har padda Gain/Pan/Tune/Fine/Attack/Decay, Start–End, Reverse, Choke, M/S, loop SYNC. **Nerve** mexanizmi: step-sekvenser (velocity, ratchet x2–x4), 16–64 step, 1/16 · 1/8 · 1/32 · 1/16T, Swing, Humanize, qatorni to'ldirish |
+| Slice loop | AZ BEAT → "Slice loop..." yoki loopni bo'sh joyga tashlash | Loop transientlar bo'yicha 16 padga bo'linadi, pattern avtomatik yoziladi |
+| Pattern → MIDI | AZ BEAT | Pattern trekka MIDI klip bo'lib tushadi, ichki SEQ o'chadi |
+| Standart kit | birinchi ochilishda | 16 ta sintez qilingan baraban (kick, snare, clap, hat, 808 ...) va boshlang'ich beat |
+| **Mikser Insert / Send** | Har kanal tepasida | "+ Insert" (qidiruvli plagin tanlash), bosish = oyna, o'ng tugma = bypass / almashtirish / o'chirish. "+ Send" = FX kanalga yoki yangi FX kanal; sudrash = daraja, 2x = 0 dB |
+| **BPM SYNC / KEY SYNC** | Media brauzer | Loop/sample tinglashda va trekka qo'yishda loyiha tempi va tonalligiga moslanadi (SoundTouch). BPM/tonallik fayl nomidan, bo'lmasa audiodan aniqlanadi; perkussiya pitch qilinmaydi. Ikkalasi alohida yoqiladi/o'chiriladi |
+| **Alt = qaychi** | Aranjirovka | Alt bosilganda oq glyansli qaychi kursori; bosish = shu joyda kesish, sudrash = nusxa. Alt qo'yilsa oddiy kursor qaytadi |
+
 ## 0.5.0: Temp qutisi · Grid (Logic X) · Direct Offline Processing · Render Selection · mikser alohida oynada
 | Funksiya | Qayerda | Nima qiladi |
 |---|---|---|

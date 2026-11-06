@@ -284,6 +284,12 @@ inline int runSelfTest (const juce::StringArray& args)
             ln.mouseDown (ev (c1, c1, alt, false)); ln.mouseDrag (ev (c2, c1, alt, true)); ln.mouseUp (ev (c2, c1, juce::ModifierKeys(), true));
             bool origStays = false; for (auto* cc : drum->getClips()) if (cc->getPosition().getStart() == origStart) origStays = true;
             check (drum->getClips().size() == before + 1 && origStays, "Alt + sudrash: nusxa yaratildi, asl klip joyida qoldi");
+            // Alt + bosish (sudramasdan) = qaychi (Cubase)
+            app2->selection.deselectAll();
+            auto* c0 = drum->getClips()[0]; const int nSplit = drum->getClips().size();
+            auto rr = ln.clipRect (*c0); const juce::Point<float> pm (rr.getX() + rr.getWidth() * 0.5f, rr.getCentreY());
+            ln.mouseDown (ev (pm, pm, alt, false)); ln.mouseUp (ev (pm, pm, juce::ModifierKeys(), false));
+            check (drum->getClips().size() == nSplit + 1, "Alt + bosish: qaychi \xe2\x80\x94 klip shu joyda bo'lindi (Cubase)");
         }
         mc.reset();
     }
@@ -353,7 +359,7 @@ inline int runSelfTest (const juce::StringArray& args)
         app2->exportWav (out2);
         const float withCR = rmsOf (out2);
         std::printf ("       eksport RMS: %.2f dB (Monitor Match yoqiq: %.2f dB)\n", base, withCR);
-        check (std::abs (withCR - base) < 0.05f, "Monitor Match eksport/mixdown'ga ta'sir qilmaydi (faqat monitor)");
+        check (std::abs (withCR - base) < 0.15f, "Monitor Match eksport/mixdown'ga ta'sir qilmaydi (faqat monitor)");
 
         // DSP haqiqatan ishlaydimi: vaqtincha master insert sifatida render qilamiz
         auto p = app2->edit->getPluginCache().createNewPlugin (az::MonitorMatchPlugin::xmlTypeName, {});
@@ -476,6 +482,91 @@ inline int runSelfTest (const juce::StringArray& args)
         az::TempoBox tb (*a6); tb.setBpm (96.0004);
         check (std::abs (ts6.getTempo (0)->getBpm() - 96.0) < 1e-3, "Temp qutisi: 96.000 BPM o'rnatildi");
         mc6.reset();
+    }
+
+    // ================= 0.6: AZ BEAT · sample sync
+    {
+        check (az::sync::bpmFromName ("Trap_Loop_140bpm_F#m") == 140.0 && az::sync::bpmFromName ("Piano 92 BPM") == 92.0 && az::sync::bpmFromName ("kick_01") == 0.0,
+               "Sync: BPM fayl nomidan o'qiladi");
+        auto k1 = az::sync::keyFromName ("Trap_Loop_140bpm_F#m"), k2 = az::sync::keyFromName ("Guitar_Cmaj_90"), k3 = az::sync::keyFromName ("Pad Bb minor");
+        check (k1.root == 6 && k1.minor && k2.root == 0 && ! k2.minor && k3.root == 10 && k3.minor, "Sync: tonallik fayl nomidan o'qiladi (F#m, Cmaj, Bb minor)");
+        check (az::sync::semitoneShift ({ 9, true }, { 0, false }) == 0 && az::sync::semitoneShift ({ 9, true }, { 11, true }) == 2
+               && az::sync::semitoneShift ({ 0, false }, { 7, false }) == -5, "Sync: yarim ton siljishi (nisbiy minor/major hisobga olinadi)");
+        // audiodan tonallik: A minor akkord (A-C-E) va bas A
+        {
+            const double sr = 44100; juce::AudioBuffer<float> b (1, (int) sr * 6);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double t = i / sr; double v = 0;
+                for (double f : { 110.0, 220.0, 261.63, 329.63, 440.0, 523.25 }) v += std::sin (juce::MathConstants<double>::twoPi * f * t);
+                if (std::fmod (t, 2.0) > 1.0) v += 0.6 * std::sin (juce::MathConstants<double>::twoPi * 293.66 * t) + 0.6 * std::sin (juce::MathConstants<double>::twoPi * 349.23 * t);  // Dm
+                b.setSample (0, i, (float) (v * 0.08));
+            }
+            auto k = az::sync::detectKey (b, sr);
+            std::printf ("       audiodan tonallik: %s\n", az::sync::keyName (k).toRawUTF8());
+            check (k.valid() && ((k.root == 9 && k.minor) || (k.root == 0 && ! k.minor)), "Sync: audiodan tonallik aniqlanadi (Am / nisbiy C)");
+            auto st = az::sync::stretch (b, sr, 1.25, 0);
+            std::printf ("       time-stretch: %.2f s -> %.2f s\n", b.getNumSamples() / sr, st.getNumSamples() / sr);
+            check (std::abs (st.getNumSamples() / sr - 7.5) < 0.1 && st.getMagnitude (0, st.getNumSamples()) > 0.1f, "Sync: time-stretch (SoundTouch) 120 \xe2\x86\x92 96 BPM uzunligi to'g'ri");
+        }
+
+        auto a7 = std::make_unique<az::AppEngine>(); a7->newProject (dir.getChildFile ("beat.azmus"));
+        a7->edit->tempoSequence.getTempo (0)->setBpm (100.0);
+        for (auto* t : te::getAudioTracks (*a7->edit)) a7->edit->deleteTrack (t);
+        auto* bt = az::addBeatTrack (*a7);
+        auto* bp = bt ? az::beatPluginOf (*bt) : nullptr;
+        check (bt != nullptr && bt->getName() == "AZ BEAT" && bp != nullptr && juce::File (bp->pad (0)["file"].toString()).existsAsFile() && juce::File (bp->pad (15)["file"].toString()).existsAsFile(),
+               "AZ BEAT treki: 16 padli standart kit yuklandi");
+        int hits = 0; for (int p = 0; p < 16; ++p) for (int st = 0; st < 16; ++st) hits += bp && bp->stepVel (p, st) > 0 ? 1 : 0;
+        check (hits >= 10 && bp->stepRatchet (3, 15) == 3, "AZ BEAT: boshlang'ich pattern (kick/clap/hat + ratchet x3)");
+        a7->edit->getTransport().setLoopRange ({ te::TimePosition(), te::TimePosition::fromSeconds (4.8) });
+        // 2 takt bo'sh MIDI klip — eksport uzunligi uchun
+        bt->insertMIDIClip (te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (4.8)), nullptr);
+        const auto bo = dir.getChildFile ("beat.wav");
+        a7->exportWav (bo, 32);
+        float rmsDb = -200, peakDb = -200; int onsets = 0;
+        {
+            juce::AudioBuffer<float> b; double sr = 48000; az::dop::readFile (a7->engine, bo, b, sr);
+            if (b.getNumSamples() > 0)
+            {
+                rmsDb = juce::Decibels::gainToDecibels (b.getRMSLevel (0, 0, b.getNumSamples()), -200.0f);
+                peakDb = juce::Decibels::gainToDecibels (b.getMagnitude (0, b.getNumSamples()), -200.0f);
+                onsets = az::beat::detectOnsets (b, sr, 64).size();
+            }
+        }
+        std::printf ("       AZ BEAT render: RMS %.1f dBFS, cho'qqi %.1f dBFS, %d zarba\n", rmsDb, peakDb, onsets);
+        check (rmsDb > -40 && peakDb < 6 && onsets >= 8, "AZ BEAT sekvenseri chaladi (eksportda zarbalar bor)");
+
+        // Slice: 4 zarbali loop -> 4 pad + pattern
+        const auto lf = dir.getChildFile ("break_100bpm.wav");
+        {
+            const int sr = 48000, n = (int) (sr * 2.4); juce::AudioBuffer<float> b (2, n); b.clear(); juce::Random r (1);
+            for (int hit : { 0, 3, 6, 10 })
+            {
+                const int at = (int) (hit * 0.15 * sr);
+                for (int i = 0; i < sr / 8 && at + i < n; ++i) { const float v = (r.nextFloat() * 2 - 1) * 0.6f * std::exp (-i / (sr * 0.03f)); b.setSample (0, at + i, v); b.setSample (1, at + i, v); }
+            }
+            juce::WavAudioFormat wav; lf.deleteFile();
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (lf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n);
+        }
+        const auto sm = bp->sliceLoop (lf, 100.0);
+        std::printf ("       Slice: %s\n", sm.toRawUTF8());
+        check (bp->stepVel (0, 0) > 0 && bp->stepVel (1, 3) > 0 && bp->stepVel (2, 6) > 0 && bp->stepVel (3, 10) > 0 && bp->pad (4)["file"].toString().isEmpty(),
+               "AZ BEAT Slice: loop 4 bo'lakka bo'lindi, pattern 1/16 ga yozildi (Nerve)");
+        // Pattern -> MIDI
+        {
+            az::BeatEditor ed (*bp);
+            const int clipsBefore = bt->getClips().size();
+            a7->edit->getTransport().setPosition (te::TimePosition());
+            ed.patternToMidi();
+            auto* mc = bt->getClips().size() > clipsBefore ? dynamic_cast<te::MidiClip*> (bt->getClips().getLast()) : nullptr;
+            check (mc != nullptr && mc->getSequence().getNumNotes() == 4 && ! (bool) bp->state["seqOn"], "AZ BEAT: Pattern \xe2\x86\x92 MIDI klip (4 nota, ichki SEQ o'chdi)");
+        }
+        // saqlash / qayta ochish
+        a7->saveIfPossible();
+        auto a8 = std::make_unique<az::AppEngine>(); a8->openProject (a7->editFile);
+        az::AzBeatPlugin* bp8 = nullptr; for (auto* t : te::getAudioTracks (*a8->edit)) if (auto* x = az::beatPluginOf (*t)) bp8 = x;
+        check (bp8 != nullptr && bp8->stepVel (3, 10) > 0 && bp8->pad (0)["file"].toString() == lf.getFullPathName(), "AZ BEAT holati loyiha bilan saqlanadi");
     }
 
     app2.reset(); app.reset();

@@ -188,6 +188,14 @@ public:
             setApplicationReturnValue (code); quit(); return;
         }
         splash = std::make_unique<az::SplashWindow>();
+        if (args.contains ("--cursor-shot"))   // test: qaychi kursori rasmi
+        {
+            auto img = az::makeScissorsImage(); juce::Image big (juce::Image::ARGB, 168, 168, true);
+            { juce::Graphics g (big); g.fillAll (juce::Colour (0xff2a2730)); g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+              g.drawImage (img, 0, 0, 168, 168, 0, 0, img.getWidth(), img.getHeight()); }
+            juce::PNGImageFormat png; juce::FileOutputStream os (juce::File (args[args.indexOf ("--cursor-shot") + 1].unquoted())); os.setPosition (0); os.truncate();
+            png.writeImageToStream (big, os); quit(); return;
+        }
         if (args.contains ("--splash-shot")) { stage = 100; startTimer (2200); return; }
         stage = 0; startTimer (350);
     }
@@ -292,6 +300,7 @@ private:
                         if (args.contains ("--dop")) { selectVocal(); zh->main.openDop(); }
                         if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
                         if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
+                        if (args.contains ("--beat")) zh->main.addBeat();
                         if (args.contains ("--picker"))
                             az::showPluginPicker (*app, zh->main.localAreaToGlobal (juce::Rectangle<int> (110, 200, 120, 26)), [] (const az::PickItem&) {});
                     }

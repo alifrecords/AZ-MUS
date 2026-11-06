@@ -113,6 +113,7 @@ inline const BuiltIn builtIns[] = {
     { "AZ Pitch Shift",      "pitchShifter",  false },
     { "AZ Synth (4OSC)",     "4osc",          true  },
     { "AZ Sampler",          "sampler",       true  },
+    { "AZ BEAT (beat maker)", "azbeat",       true  },
 };
 
 inline juce::String pluginDisplayName (te::Plugin& p)

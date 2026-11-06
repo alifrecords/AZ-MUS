@@ -7,7 +7,7 @@ on:
 
 env:
   TE_COMMIT: a5e44996f5f08dfa6af5f5d02d900fb3cfa37422
-  APP_VERSION: 0.5.0
+  APP_VERSION: 0.6.0
 
 jobs:
   windows:

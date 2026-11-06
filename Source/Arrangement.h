@@ -141,6 +141,42 @@ inline juce::String formatTime (te::Edit& e, te::TimePosition pos, const ViewSta
     return juce::String::formatted ("%03d.%d.%d.%03d", bb.bars + 1, bb.getWholeBeats() + 1, six, tick);
 }
 
+// Cubase kabi: Alt bosib turilganda kichik oq glyansli qaychi kursori
+inline juce::Image makeScissorsImage()
+{
+    {
+        const int S = 28;
+        juce::Image img (juce::Image::ARGB, S, S, true);
+        juce::Graphics g (img);
+        auto blade = [&] (bool left)
+        {
+            juce::Path b;
+            const float sx = left ? 9.0f : 19.0f, ex = left ? 17.5f : 10.5f;
+            b.startNewSubPath (ex, 2.0f);
+            b.quadraticTo ((sx + ex) * 0.5f + (left ? -1.5f : 1.5f), 9.0f, sx, 15.5f);
+            b.lineTo (sx + (left ? 2.4f : -2.4f), 16.5f);
+            b.quadraticTo ((sx + ex) * 0.5f + (left ? 1.0f : -1.0f), 9.5f, ex + (left ? -0.6f : 0.6f), 2.0f);
+            b.closeSubPath();
+            return b;
+        };
+        juce::Path blades; blades.addPath (blade (true)); blades.addPath (blade (false));
+        juce::Path rings;
+        rings.addEllipse (3.5f, 16.5f, 8.5f, 8.5f); rings.addEllipse (6.0f, 19.0f, 3.5f, 3.5f);
+        rings.addEllipse (16.0f, 16.5f, 8.5f, 8.5f); rings.addEllipse (18.5f, 19.0f, 3.5f, 3.5f);
+        rings.setUsingNonZeroWinding (false);   // ichki doiralar teshik bo'ladi
+        // qora kontur (har qanday fonda ko'rinadi)
+        g.setColour (juce::Colours::black.withAlpha (0.85f));
+        g.strokePath (blades, juce::PathStrokeType (2.2f)); g.strokePath (rings, juce::PathStrokeType (2.0f));
+        // oq glyans
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white, 10, 2, juce::Colour (0xffc9ced6), 18, 26, false));
+        g.fillPath (blades); g.fillPath (rings);
+        g.setColour (juce::Colours::white.withAlpha (0.9f)); g.fillEllipse (13.0f, 14.5f, 2.2f, 2.2f);       // vint
+        g.setColour (juce::Colours::white.withAlpha (0.55f)); g.drawLine (12.5f, 4.0f, 10.5f, 12.0f, 0.8f); // yaltirash
+        return img;
+    }
+}
+inline juce::MouseCursor makeScissorsCursor() { return juce::MouseCursor (makeScissorsImage(), 14, 2); }
+
 // =============================================================================  Ruler
 class TimeRuler : public juce::Component
 {
@@ -501,7 +537,18 @@ public:
             marquee.reset(); repaint();
             if (onSelectionChanged) onSelectionChanged();
         }
+        // Alt + bosish (sudramasdan) = qaychi: shu joyda bo'lish (Cubase)
+        if (drag.clip != nullptr && drag.copy && ! drag.copied && ! e.mouseWasDraggedSinceMouseDown() && app.edit)
+        {
+            app.edit->getUndoManager().undoCurrentTransactionOnly();
+            app.edit->getUndoManager().beginNewTransaction (U ("Bo'lish"));
+            const auto at = snapTime (*app.edit, vs.xToSec (e.mouseDownPosition.x), vs, false, drag.clip.get());
+            if (auto* ct = dynamic_cast<te::ClipTrack*> (drag.clip->getTrack()))
+                if (at > drag.clip->getPosition().getStart() && at < drag.clip->getPosition().getEnd()) ct->splitClip (*drag.clip, at);
+            repaint();
+        }
         drag = {};
+        updateCursor (e.position, e.mods);
     }
 
     te::Clip::Ptr cloneInPlace (te::Clip& c)
@@ -513,9 +560,25 @@ public:
         return t->insertClipWithState (st);
     }
     std::optional<juce::Rectangle<float>> marquee;
+    juce::MouseCursor scissors = makeScissorsCursor();
 
+    void modifierKeysChanged (const juce::ModifierKeys& m) override
+    {
+        if (! isMouseOverOrDragging()) return;
+        updateCursor (getMouseXYRelative().toFloat(), m);
+    }
+    void updateCursor (juce::Point<float> pos, const juce::ModifierKeys& m)
+    {
+        auto* c = clipAt (pos);
+        if (vs.tool == 1 || (vs.tool == 0 && m.isAltDown() && ! m.isAnyMouseButtonDown())) { setMouseCursor (scissors); return; }
+        if (vs.tool != 0) { setMouseCursor (c ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); return; }
+        setMouseCursor (c && pos.x > clipRect (*c).getRight() - 6 ? juce::MouseCursor::LeftRightResizeCursor
+                                                                  : c ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    }
     void mouseMove (const juce::MouseEvent& e) override
     {
+        updateCursor (e.position, e.mods);
+        return;
         auto* c = clipAt (e.position);
         if (vs.tool != 0) { setMouseCursor (c ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); return; }
         setMouseCursor (c && e.position.x > clipRect (*c).getRight() - 6 ? juce::MouseCursor::LeftRightResizeCursor
@@ -623,13 +686,21 @@ public:
         for (auto& f : files) importAt (juce::File (f), x, y);
         repaint();
     }
-    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString().startsWith ("file:"); }
+    std::function<void (te::WaveAudioClip&, const juce::File&)> onAudioImported;
+    static juce::File dragFile (const SourceDetails& d)
+    {
+        const auto s = d.description.toString();
+        if (s.startsWith ("file:")) return juce::File (s.fromFirstOccurrenceOf ("file:", false, false));
+        if (auto* ft = dynamic_cast<juce::FileTreeComponent*> (d.sourceComponent.get())) return ft->getSelectedFile();
+        return {};
+    }
+    bool isInterestedInDragSource (const SourceDetails& d) override { return dragFile (d).existsAsFile(); }
     void itemDragEnter (const SourceDetails&) override { dropHint = true; repaint(); }
     void itemDragExit (const SourceDetails&) override { dropHint = false; repaint(); }
     void itemDropped (const SourceDetails& d) override
     {
         dropHint = false;
-        importAt (juce::File (d.description.toString().fromFirstOccurrenceOf ("file:", false, false)), d.localPosition.x, d.localPosition.y);
+        importAt (dragFile (d), d.localPosition.x, d.localPosition.y);
         repaint();
     }
 
@@ -641,7 +712,8 @@ public:
         if (t == nullptr) t = midi ? app.addInstrumentTrack (f.getFileNameWithoutExtension()) : app.addAudioTrack (f.getFileNameWithoutExtension());
         if (t == nullptr) return;
         const auto at = snapTime (*app.edit, vs.xToSec ((float) x), vs);
-        if (midi) app.importMidi (*t, f, at); else app.importAudio (*t, f, at);
+        if (midi) app.importMidi (*t, f, at);
+        else if (auto c = app.importAudio (*t, f, at)) { if (onAudioImported) onAudioImported (*c, f); }
         vs.selectedTrack = t->itemID; vs.changed();
     }
 
@@ -739,7 +811,18 @@ public:
         if (! app.edit) return;
         auto tracks = te::getAudioTracks (*app.edit);
         const int i = (e.y + vs.scrollY) / vs.trackH;
-        if (juce::isPositiveAndBelow (i, tracks.size())) rename (*tracks[i]);
+        if (juce::isPositiveAndBelow (i, tracks.size()))
+        {
+            if (auto* bp = beatOf (*tracks[i]); bp != nullptr && e.x > 40) { bp->showWindowExplicitly(); return; }
+            rename (*tracks[i]);
+        }
+        else if (onAddTrack) onAddTrack();
+    }
+    std::function<void()> onAddTrack;
+    static te::Plugin* beatOf (te::AudioTrack& t)
+    {
+        for (auto p : t.pluginList.getPlugins()) if (p->getPluginType() == "azbeat") return p;
+        return nullptr;
     }
 
     void rename (te::AudioTrack& t)
@@ -755,6 +838,7 @@ public:
     {
         juce::PopupMenu m, col;
         m.addSectionHeader (t.getName());
+        if (beatOf (t)) { m.addItem (3, U ("AZ BEAT'ni ochish (padlar + sekvenser)")); m.addSeparator(); }
         m.addItem (1, U ("Nomini o'zgartirish"));
         for (int i = 0; i < 8; ++i) col.addColouredItem (100 + i, U ("\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"), trackColours[i]);
         m.addSubMenu (U ("Rang"), col);
@@ -763,6 +847,7 @@ public:
         m.showMenuAsync ({}, [this, tp] (int r)
         {
             if (r == 1) rename (*dynamic_cast<te::AudioTrack*> (tp.get()));
+            if (r == 3) if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (auto* bp = beatOf (*at)) bp->showWindowExplicitly();
             if (r >= 100) tp->setColour (trackColours[r - 100]);
             if (r == 2) { app.edit->getUndoManager().beginNewTransaction ("Trek"); app.edit->deleteTrack (tp.get()); vs.changed(); }
             repaint();

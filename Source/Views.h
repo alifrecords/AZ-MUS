@@ -4,6 +4,7 @@
 #pragma once
 #include "Arrangement.h"
 #include "PluginPicker.h"
+#include "SampleSync.h"
 
 namespace az
 {
@@ -759,10 +760,130 @@ public:
     }
     void detachMeter() { if (measurer) measurer->removeClient (client); measurer = nullptr; }
 
+    int panY() const   { return track ? 84 : 64; }
+    int faderY() const { return track ? 120 : 104; }
     void resized() override
     {
-        pan.setBounds (getWidth() / 2 - 17, 64, 34, 34);
-        fader.setBounds (8, 104, 30, getHeight() - 150);
+        pan.setBounds (getWidth() / 2 - 17, panY(), 34, 34);
+        fader.setBounds (8, faderY(), 30, getHeight() - faderY() - 46);
+    }
+    std::function<void()> onRoutingChanged;
+    juce::Rectangle<float> insSlot (int i) const  { return { 6, 4.0f + (float) i * 15.0f, (float) getWidth() - 12, 13 }; }
+    juce::Rectangle<float> sendSlot (int i) const { return { 6, 52.0f + (float) i * 15.0f, (float) getWidth() - 12, 13 }; }
+    void trackMouseDown (const juce::MouseEvent& e)
+    {
+        auto plugs = AppEngine::userPlugins (*track);
+        juce::Component::SafePointer<ChannelStrip> sp (this);
+        te::Track::Ptr tp (track);
+        for (int i = 0; i < 3; ++i)
+        {
+            if (! insSlot (i).contains (e.position)) continue;
+            if (i < plugs.size())
+            {
+                te::Plugin::Ptr p (plugs[i]);
+                if (! e.mods.isPopupMenu()) { p->showWindowExplicitly(); return; }
+                juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
+                m.addItem (1, U ("Oynasini ochish")); m.addItem (2, p->isEnabled() ? "Bypass" : U ("Yoqish"));
+                m.addItem (4, U ("Almashtirish...")); m.addSeparator(); m.addItem (3, U ("O'chirish"));
+                m.showMenuAsync ({}, [sp, p, tp, this, i] (int r)
+                {
+                    if (r == 1) p->showWindowExplicitly();
+                    if (r == 2) p->setEnabled (! p->isEnabled());
+                    if (r == 3) { p->edit.getUndoManager().beginNewTransaction ("Insert"); p->deleteFromParent(); }
+                    if (r == 4 && sp)
+                        showPluginPicker (app, localAreaToGlobal (insSlot (i).toNearestInt()), [sp, p, tp, this] (const PickItem& it)
+                        {
+                            auto* at = dynamic_cast<te::AudioTrack*> (tp.get()); if (! at || ! sp) return;
+                            const int idx = at->pluginList.indexOf (p.get());
+                            p->deleteFromParent();
+                            if (auto np = insertPicked (app, *at, it)) { if (idx >= 0) { np->removeFromParent(); at->pluginList.insertPlugin (np, juce::jmin (idx, at->pluginList.size()), nullptr); } np->showWindowExplicitly(); }
+                            sp->changed();
+                        });
+                    if (sp) sp->changed();
+                });
+            }
+            else
+                showPluginPicker (app, localAreaToGlobal (insSlot (i).toNearestInt()), [sp, tp, this] (const PickItem& it)
+                {
+                    if (! sp) return;
+                    if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (auto p = insertPicked (app, *at, it)) p->showWindowExplicitly();
+                    sp->changed();
+                });
+            return;
+        }
+        auto ss = Routing::sends (*track);
+        for (int i = 0; i < 2; ++i)
+        {
+            if (! sendSlot (i).contains (e.position)) continue;
+            if (i < ss.size())
+            {
+                auto* snd = ss[i];
+                if (e.mods.isPopupMenu())
+                {
+                    te::Plugin::Ptr p (snd);
+                    juce::PopupMenu m; m.addSectionHeader (juce::String::fromUTF8 ("Send \xe2\x86\x92 ") + app.edit->getAuxBusName (snd->getBusNumber()));
+                    m.addItem (2, snd->isEnabled() ? U ("O'chirib qo'yish (bypass)") : U ("Yoqish")); m.addItem (5, "0 dB"); m.addItem (6, "-10 dB");
+                    m.addSeparator(); m.addItem (3, U ("Sendni olib tashlash"));
+                    m.showMenuAsync ({}, [sp, p] (int r)
+                    {
+                        auto* s2 = dynamic_cast<te::AuxSendPlugin*> (p.get()); if (! s2) return;
+                        if (r == 2) s2->setEnabled (! s2->isEnabled());
+                        if (r == 5) s2->setGainDb (0); if (r == 6) s2->setGainDb (-10);
+                        if (r == 3) { s2->edit.getUndoManager().beginNewTransaction ("Send"); s2->deleteFromParent(); }
+                        if (sp) sp->changed();
+                    });
+                }
+                else { dragSend = snd; dragStartDb = snd->getGainDb(); }
+            }
+            else if (i == ss.size()) showSendMenu (sendSlot (i));
+            return;
+        }
+    }
+    void showSendMenu (juce::Rectangle<float> area)
+    {
+        Routing rt (app);
+        juce::PopupMenu m; auto fx = rt.fxTracks();
+        for (int k = 0; k < fx.size(); ++k) if (fx[k] != track) m.addItem (100 + k, fx[k]->getName());
+        if (fx.size() > 0) m.addSeparator();
+        m.addItem (1, U ("Yangi FX kanal (AZ Reverb)")); m.addItem (2, U ("Yangi FX kanal (AZ Delay)")); m.addItem (3, U ("Yangi FX kanal (plagin tanlash...)"));
+        juce::Component::SafePointer<ChannelStrip> sp (this);
+        te::Track::Ptr tp (track);
+        m.showMenuAsync ({}, [this, sp, tp, fx, area] (int r)
+        {
+            auto* at = dynamic_cast<te::AudioTrack*> (tp.get()); if (! at || r == 0 || ! sp) return;
+            Routing rt2 (app);
+            auto done = [this, tp, sp] (te::AudioTrack* fxT)
+            {
+                if (auto* src = dynamic_cast<te::AudioTrack*> (tp.get())) if (fxT) Routing (app).addSend (*src, Routing::fxBus (*fxT));
+                if (sp) sp->changed (true);
+            };
+            if (r >= 100) { done (fx[r - 100]); return; }
+            if (r == 1) done (rt2.addFxChannel ("Reverb", "reverb", {}));
+            if (r == 2) done (rt2.addFxChannel ("Delay", "delay", {}));
+            if (r == 3)
+                showPluginPicker (app, localAreaToGlobal (area.toNearestInt()), [this, done] (const PickItem& it)
+                {
+                    juce::String xml; juce::PluginDescription d;
+                    if (it.kind == 0) xml = builtIns[it.index].xmlType;
+                    else if (it.kind == 1) xml = airwindowsPlugins[it.index].xmlType;
+                    else if (it.kind == 2) { xml = te::ExternalPlugin::xmlTypeName; d = app.engine.getPluginManager().knownPluginList.getTypes()[it.index]; }
+                    done (Routing (app).addFxChannel (it.name, xml, d));
+                });
+        });
+    }
+    void changed (bool structural = false) { repaint(); if (onRoutingChanged && structural) onRoutingChanged(); else if (onRoutingChanged) onRoutingChanged(); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragSend == nullptr) return;
+        dragSend->setGainDb ((float) juce::jlimit (-60.0, 6.0, dragStartDb + e.getDistanceFromDragStartX() * 0.25 - e.getDistanceFromDragStartY() * 0.25));
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent&) override { dragSend = nullptr; }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (track == nullptr) return;
+        auto ss = Routing::sends (*track);
+        for (int i = 0; i < juce::jmin (2, ss.size()); ++i) if (sendSlot (i).contains (e.position)) { ss[i]->setGainDb (0); repaint(); }
     }
     void tick()
     {
@@ -774,14 +895,15 @@ public:
             const float nv = v > lv[c] ? v : juce::jmax (0.0f, lv[c] - 0.03f);
             if (std::abs (nv - lv[c]) > 0.003f) { lv[c] = nv; ch = true; }
         }
-        if (ch) repaint (40, 104, 30, getHeight() - 150);
+        if (ch) repaint (40, faderY(), 30, getHeight() - faderY() - 46);
     }
     float level() const { return juce::jmax (lv[0], lv[1]); }
 
     juce::Rectangle<float> masterSlot (int i) const { return { 6, 4.0f + (float) i * 14.5f, (float) getWidth() - 12, 13 }; }
     void mouseDown (const juce::MouseEvent& e) override
     {
-        if (track != nullptr || app.edit == nullptr) return;
+        if (app.edit == nullptr) return;
+        if (track != nullptr) { trackMouseDown (e); return; }
         auto plugs = masterInserts (*app.edit);
         for (int i = 0; i < 4; ++i)
         {
@@ -826,11 +948,30 @@ public:
             auto plugs = AppEngine::userPlugins (*track);
             for (int i = 0; i < 3; ++i)
             {
-                auto s = Rectangle<float> (6, 6.0f + (float) i * 18, r.getWidth() - 12, 15);
-                const bool has = i < plugs.size();
+                auto s = insSlot (i);
+                const bool has = i < plugs.size(), add = i == plugs.size();
                 const bool az = has && pluginDisplayName (*plugs[i]).startsWithIgnoreCase ("AZ");
-                g.setColour (az ? red.withAlpha (0.16f) : Colours::white.withAlpha (0.04f)); g.fillRoundedRectangle (s, 4);
-                label (g, has ? pluginDisplayName (*plugs[i]) : U ("\xe2\x80\x94"), s.reduced (5, 0), 8.5f, az ? redSoft : has ? Colour (0xffa49c9e) : dim2, Justification::centredLeft, 400);
+                const bool on = has && plugs[i]->isEnabled();
+                g.setColour (has ? (az ? red : silver).withAlpha (on ? 0.16f : 0.05f) : Colours::white.withAlpha (add ? 0.05f : 0.025f)); g.fillRoundedRectangle (s, 4);
+                String txt = has ? pluginDisplayName (*plugs[i]) : add ? U ("+ Insert") : String::fromUTF8 ("\xe2\x80\x94");
+                if (i == 2 && plugs.size() > 3) txt = "+" + String (plugs.size() - 2) + " insert";
+                label (g, txt, s.reduced (5, 0), 8.5f, has ? (on ? (az ? redSoft : Colour (0xffd0c9ca)) : dim2) : add ? silver : dim2, Justification::centredLeft, has ? 500 : 400);
+            }
+            auto ss = Routing::sends (*track);
+            for (int i = 0; i < 2; ++i)
+            {
+                auto s = sendSlot (i);
+                const bool has = i < ss.size(), add = i == ss.size();
+                const Colour sc (0xff4ad6ff);
+                g.setColour (has ? sc.withAlpha (ss[i]->isEnabled() ? 0.14f : 0.05f) : Colours::white.withAlpha (add ? 0.05f : 0.025f)); g.fillRoundedRectangle (s, 4);
+                if (has)
+                {
+                    const float frac = jlimit (0.0f, 1.0f, (ss[i]->getGainDb() + 60.0f) / 66.0f);
+                    g.setColour (sc.withAlpha (0.25f)); g.fillRoundedRectangle (s.withWidth (s.getWidth() * frac), 4);
+                    label (g, String::fromUTF8 ("\xe2\x86\x92 ") + app.edit->getAuxBusName (ss[i]->getBusNumber()), s.reduced (5, 0), 8.5f, ss[i]->isEnabled() ? sc : dim2, Justification::centredLeft, 500);
+                    label (g, String (ss[i]->getGainDb(), 1), s.reduced (4, 0), 8, silver, Justification::centredRight, 500);
+                }
+                else label (g, add ? U ("+ Send") : String::fromUTF8 ("\xe2\x80\x94"), s.reduced (5, 0), 8.5f, add ? silver : dim2, Justification::centredLeft, 400);
             }
         }
         else
@@ -850,7 +991,7 @@ public:
         // metr
         for (int c = 0; c < 2; ++c)
         {
-            auto m = Rectangle<float> (46.0f + (float) c * 9, 104, 5, (float) getHeight() - 150);
+            auto m = Rectangle<float> (46.0f + (float) c * 9, (float) faderY(), 5, (float) (getHeight() - faderY() - 46));
             g.setColour (Colours::white.withAlpha (0.05f)); g.fillRoundedRectangle (m, 2.5f);
             auto f = m.withTop (m.getBottom() - m.getHeight() * lv[c]);
             g.setGradientFill (ColourGradient (red, 0, m.getY(), green, 0, m.getBottom(), false));
@@ -865,6 +1006,7 @@ private:
     juce::Slider fader, pan;
     te::LevelMeasurer::Client client; te::LevelMeasurer* measurer = nullptr;
     float lv[2] {};
+    te::AuxSendPlugin* dragSend = nullptr; double dragStartDb = 0;
 };
 
 
@@ -1050,6 +1192,15 @@ class Mixer : public juce::Component, private juce::Timer
 public:
     std::function<void (te::EditItemID, float)> onTrackLevel;
     std::function<void()> onDetach;          // alohida oynaga ajratish / qaytarish
+    std::function<void()> onRoutingChanged;  // insert/send o'zgardi (inspektor yangilanadi)
+    void rebuildIfNeeded()
+    {
+        if (! app.edit) return;
+        auto ts = te::getAudioTracks (*app.edit);
+        bool same = ts.size() == ids.size();
+        for (int i = 0; same && i < ts.size(); ++i) same = ts[i]->itemID == ids[i];
+        if (! same) rebuild(); else for (auto* s : strips) s->repaint();
+    }
     bool detached = false;
     explicit Mixer (AppEngine& a) : app (a)
     {
@@ -1068,7 +1219,11 @@ public:
     {
         strips.clear(); ids.clear(); master.reset(); croom.reset();
         if (! app.edit) return;
-        for (auto* t : te::getAudioTracks (*app.edit)) { auto* s = strips.add (new ChannelStrip (app, t)); holder.addAndMakeVisible (s); ids.add (t->itemID); }
+        for (auto* t : te::getAudioTracks (*app.edit))
+        {
+            auto* s = strips.add (new ChannelStrip (app, t)); holder.addAndMakeVisible (s); ids.add (t->itemID);
+            s->onRoutingChanged = [this] { juce::Component::SafePointer<Mixer> sp (this); juce::MessageManager::callAsync ([sp] { if (sp) { sp->rebuildIfNeeded(); if (sp->onRoutingChanged) sp->onRoutingChanged(); } }); };
+        }
         master = std::make_unique<ChannelStrip> (app, nullptr); addAndMakeVisible (*master);
         croom = std::make_unique<ControlRoomStrip> (app); addAndMakeVisible (*croom);
         resized();
@@ -1113,6 +1268,35 @@ class MediaBrowser : public juce::Component, private juce::FileBrowserListener, 
 {
 public:
     std::function<void (const juce::File&)> onInsertFile;
+    bool syncBpm() const { return bpmB.getToggleState(); }
+    bool syncKey() const { return keyB.getToggleState(); }
+    double projBpm() const { return app.edit ? app.edit->tempoSequence.getTempo (0)->getBpm() : 120.0; }
+    sync::KeyInfo projKey() const { return app.edit ? sync::keyFromString (app.edit->state.getProperty ("azKey", "A minor").toString()) : sync::KeyInfo {}; }
+
+    // trekka qo'yilgan audio klipni loyiha BPM/tonalligiga moslash (yoqilgan bo'lsa)
+    juce::String applySync (te::WaveAudioClip& c, const juce::File& f)
+    {
+        if (! syncBpm() && ! syncKey()) return {};
+        auto fi = sync::analyse (app.engine, f, projBpm());
+        juce::String msg;
+        const auto arrow = juce::String::fromUTF8 (" \xe2\x86\x92 "), dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
+        if (syncBpm() && fi.loop && fi.bpm > 0)
+        {
+            c.setTimeStretchMode (te::TimeStretcher::soundtouchBetter);
+            c.getLoopInfo().setBpm (fi.bpm, c.getAudioFile().getInfo());
+            c.setAutoTempo (true);
+            const double beats = fi.lengthSec * fi.bpm / 60.0;
+            c.setLength (te::TimeDuration::fromSeconds (beats * 60.0 / projBpm()), true);
+            msg << juce::String (fi.bpm, 1) << arrow << juce::String (projBpm(), 1) << " BPM";
+        }
+        if (syncKey() && ! fi.drum && fi.key.valid())
+        {
+            const int st = sync::semitoneShift (fi.key, projKey());
+            if (st != 0) { if (c.getTimeStretchMode() == te::TimeStretcher::disabled) c.setTimeStretchMode (te::TimeStretcher::soundtouchBetter); c.setPitchChange ((float) st); }
+            msg << (msg.isEmpty() ? juce::String() : dot) << sync::keyName (fi.key) << arrow << sync::keyName (projKey()) << " (" << (st > 0 ? "+" : "") << st << " st)";
+        }
+        return msg;
+    }
 
     explicit MediaBrowser (AppEngine& a) : app (a)
     {
@@ -1137,13 +1321,22 @@ public:
                                   [this] (const juce::FileChooser& fc) { if (fc.getResult().isDirectory()) setRoot (fc.getResult()); });
         };
         formats.registerBasicFormats();
+        auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
+        for (auto* b : { &bpmB, &keyB }) { addAndMakeVisible (b); b->setClickingTogglesState (true); b->getProperties().set ("radius", 5.0f); b->setColour (juce::TextButton::buttonOnColourId, green.withAlpha (0.35f)); }
+        bpmB.setButtonText ("BPM SYNC"); keyB.setButtonText ("KEY SYNC");
+        bpmB.setTooltip (U ("Loop'larni loyiha tempiga moslab tinglash va trekka qo'yish"));
+        keyB.setTooltip (U ("Sample/loop'larni loyiha tonalligiga moslash (perkussiyaga ta'sir qilmaydi)"));
+        bpmB.setToggleState (pf.getBoolValue ("azSyncBpm", true), juce::dontSendNotification);
+        keyB.setToggleState (pf.getBoolValue ("azSyncKey", true), juce::dontSendNotification);
+        bpmB.onClick = [this] { app.engine.getPropertyStorage().getPropertiesFile().setValue ("azSyncBpm", bpmB.getToggleState()); if (previewFile.existsAsFile()) startPreview (previewFile); };
+        keyB.onClick = [this] { app.engine.getPropertyStorage().getPropertiesFile().setValue ("azSyncKey", keyB.getToggleState()); if (previewFile.existsAsFile()) startPreview (previewFile); };
         app.engine.getDeviceManager().deviceManager.addAudioCallback (&player);
         player.setSource (&transport);
         transport.addChangeListener (this);
     }
     ~MediaBrowser() override
     {
-        transport.setSource (nullptr); player.setSource (nullptr);
+        transport.stop(); transport.setSource (nullptr); player.setSource (nullptr);
         app.engine.getDeviceManager().deviceManager.removeAudioCallback (&player);
         tree->removeListener (this);
     }
@@ -1160,7 +1353,9 @@ public:
         auto row = r.removeFromTop (28); const int w = (row.getWidth() - 18) / 4;
         for (auto* b : { &bMusic, &bDocs, &bProj, &bPick }) { b->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6); }
         r.removeFromTop (26);
-        auto prev = r.removeFromBottom (86); juce::ignoreUnused (prev);
+        auto prev = r.removeFromBottom (124);
+        auto sb = prev.removeFromTop (24); const int bw = (sb.getWidth() - 6) / 2;
+        bpmB.setBounds (sb.removeFromLeft (bw)); sb.removeFromLeft (6); keyB.setBounds (sb);
         tree->setBounds (r);
     }
     void paint (juce::Graphics& g) override
@@ -1170,7 +1365,7 @@ public:
         g.setColour (line); g.drawVerticalLine (0, 0, (float) getHeight());
         caps (g, "MEDIA BRAUZER", { 14, 12, 200, 12 });
         label (g, root.getFullPathName(), { 14, 70, (float) getWidth() - 28, 16 }, 10, dim2, Justification::centredLeft, 400);
-        auto pr = Rectangle<float> (12, (float) getHeight() - 92, (float) getWidth() - 24, 80);
+        auto pr = Rectangle<float> (12, (float) getHeight() - 104, (float) getWidth() - 24, 92);
         caps (g, "OLDINDAN TINGLASH", pr.withHeight (12));
         auto box = pr.withTrimmedTop (18);
         panel (g, box, 8);
@@ -1182,6 +1377,7 @@ public:
             g.setColour (Colours::white.withAlpha (0.07f)); g.fillRoundedRectangle (bar, 2);
             g.setColour (red); g.fillRoundedRectangle (bar.withWidth (len > 0 ? bar.getWidth() * (float) (pos / len) : 0), 2);
             caps (g, transport.isPlaying() ? U ("\xe2\x96\xa0 TO'XTATISH UCHUN BOSING") : U ("2X BOSING: TREKKA QO'SHISH"), box.reduced (10, 0).withTrimmedTop (22).withHeight (12), 8.5f, dim);
+            if (syncInfo.isNotEmpty()) label (g, syncInfo, box.reduced (10, 0).withTrimmedTop (36).withHeight (14), 9.5f, green, Justification::centredLeft, 600);
         }
         else label (g, U ("Faylni bir marta bosing \xe2\x80\x94 eshitasiz, 2x \xe2\x80\x94 trekka qo'shiladi, sudrab tashlash ham mumkin"),
                     box.reduced (10, 6), 10.5f, dim, Justification::centredLeft, 400);
@@ -1194,14 +1390,39 @@ private:
     {
         if (f.isDirectory()) return;
         if (f == previewFile && transport.isPlaying()) { transport.stop(); repaint(); return; }
-        transport.stop(); transport.setSource (nullptr); reader.reset();
-        previewFile = f;
-        if (auto* r = formats.createReaderFor (f))
+        startPreview (f);
+    }
+    void startPreview (const juce::File& f)
+    {
+        transport.stop(); transport.setSource (nullptr); reader.reset(); memSrc.reset();
+        previewFile = f; syncInfo = {};
+        std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (f));
+        if (r == nullptr) { repaint(); return; }
+        const double sr = r->sampleRate, len = (double) r->lengthInSamples / sr;
+        if ((syncBpm() || syncKey()) && len < 90.0 && ! f.hasFileExtension ("mid;midi"))
         {
-            reader = std::make_unique<juce::AudioFormatReaderSource> (r, true);
-            transport.setSource (reader.get(), 0, nullptr, r->sampleRate);
-            transport.setPosition (0); transport.start();
+            auto fi = sync::analyse (app.engine, f, projBpm(), &memBuf);
+            double speed = 1.0, semis = 0.0; juce::String inf;
+            const auto arrow = juce::String::fromUTF8 (" \xe2\x86\x92 "), dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
+            if (syncBpm() && fi.loop && fi.bpm > 0) { speed = fi.bpm / projBpm(); inf << juce::String (fi.bpm, 1) << (fi.bpmGuessed ? "?" : "") << arrow << juce::String (projBpm(), 1) << " BPM"; }
+            if (syncKey() && ! fi.drum && fi.key.valid())
+            {
+                semis = sync::semitoneShift (fi.key, projKey());
+                inf << (inf.isEmpty() ? juce::String() : dot) << sync::keyName (fi.key) << (fi.key.guessed ? "?" : "") << arrow << sync::keyName (projKey())
+                    << " (" << (semis > 0 ? "+" : "") << (int) semis << " st)";
+            }
+            else if (fi.drum) inf << (inf.isEmpty() ? juce::String() : dot) << "perkussiya";
+            syncInfo = inf;
+            if (std::abs (speed - 1.0) > 1e-3 || std::abs (semis) > 1e-3) memBuf = sync::stretch (memBuf, fi.sampleRate, speed, semis);
+            memSrc = std::make_unique<juce::MemoryAudioSource> (memBuf, false, fi.loop);
+            transport.setSource (memSrc.get(), 0, nullptr, fi.sampleRate);
         }
+        else
+        {
+            reader = std::make_unique<juce::AudioFormatReaderSource> (r.release(), true);
+            transport.setSource (reader.get(), 0, nullptr, sr);
+        }
+        transport.setPosition (0); transport.start();
         repaint();
     }
     void fileDoubleClicked (const juce::File& f) override { if (! f.isDirectory() && onInsertFile) { transport.stop(); onInsertFile (f); } }
@@ -1217,6 +1438,8 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     juce::AudioFormatManager formats; juce::AudioSourcePlayer player; juce::AudioTransportSource transport;
     std::unique_ptr<juce::AudioFormatReaderSource> reader;
+    juce::AudioBuffer<float> memBuf; std::unique_ptr<juce::MemoryAudioSource> memSrc; juce::String syncInfo;
+    juce::TextButton bpmB, keyB;
 };
 
 // =============================================================================  Holat qatori
