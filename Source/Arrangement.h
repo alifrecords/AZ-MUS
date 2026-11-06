@@ -3,6 +3,7 @@
 // =============================================================================
 #pragma once
 #include "AppEngine.h"
+#include <set>
 
 namespace az
 {
@@ -27,6 +28,7 @@ struct ViewState : public juce::ChangeBroadcaster
     int timeFormat = fmtBars; int fps = 25;
     // ---- Quantize
     double quantize = 0.5; bool linkQ = true;
+    bool transientMagnet = true;        // qaychi: audiodagi zarba boshiga yopishish
 
     float secToX (double s) const { return (float) ((s - startSec) * pxPerSec); }
     double xToSec (float x) const { return startSec + (double) x / pxPerSec; }
@@ -176,6 +178,47 @@ inline juce::Image makeScissorsImage()
     }
 }
 inline juce::MouseCursor makeScissorsCursor() { return juce::MouseCursor (makeScissorsImage(), 14, 2); }
+
+// audiodagi zarba (transient) boshlanishlari, soniyalarda (fayl ichida)
+inline std::vector<double> detectTransients (te::Engine& eng, const juce::File& f)
+{
+    std::vector<double> out;
+    std::unique_ptr<juce::AudioFormatReader> r (eng.getAudioFileFormatManager().readFormatManager.createReaderFor (f));
+    if (! r) return out;
+    const double sr = r->sampleRate;
+    const int hop = juce::jmax (32, (int) (sr * 0.004));
+    const juce::int64 total = std::min<juce::int64> (r->lengthInSamples, (juce::int64) (sr * 1200));
+    juce::AudioBuffer<float> b ((int) juce::jmax (1u, r->numChannels), (int) std::min<juce::int64> (total, (juce::int64) sr * 20));
+    std::vector<float> env; env.reserve ((size_t) (total / hop + 1));
+    std::vector<float> mono; mono.reserve ((size_t) total);
+    for (juce::int64 pos = 0; pos < total; pos += b.getNumSamples())
+    {
+        const int n = (int) std::min<juce::int64> (b.getNumSamples(), total - pos);
+        r->read (&b, 0, n, pos, true, true);
+        for (int i = 0; i < n; ++i) { float v = 0; for (int c = 0; c < b.getNumChannels(); ++c) v += std::abs (b.getSample (c, i)); mono.push_back (v / b.getNumChannels()); }
+    }
+    for (size_t s = 0; s + (size_t) hop <= mono.size(); s += (size_t) hop)
+    {
+        double sum = 0; for (int i = 0; i < hop; ++i) sum += (double) mono[s + (size_t) i] * mono[s + (size_t) i];
+        env.push_back ((float) (10.0 * std::log10 (juce::jmax (1e-12, sum / hop))));
+    }
+    const int minGap = (int) (0.06 * sr / hop);
+    int last = -minGap;
+    for (int i = 6; i < (int) env.size(); ++i)
+    {
+        float before = -200; for (int k = 2; k <= 6; ++k) before = juce::jmax (before, env[(size_t) (i - k)]);
+        if (env[(size_t) i] > -48.0f && env[(size_t) i] - before > 6.0f && i - last > minGap)
+        {
+            // aniq boshlanish: shu kadrdan oldin signal 15% cho'qqidan oshgan birinchi namuna
+            const size_t a = (size_t) juce::jmax (0, (i - 2) * hop), z = juce::jmin (mono.size(), (size_t) (i + 3) * (size_t) hop);
+            float pk = 0; for (size_t q = a; q < z; ++q) pk = juce::jmax (pk, mono[q]);
+            size_t at = (size_t) i * (size_t) hop;
+            for (size_t q = a; q < z; ++q) if (mono[q] > pk * 0.15f) { at = q; break; }
+            out.push_back ((double) at / sr); last = i;
+        }
+    }
+    return out;
+}
 
 // =============================================================================  Ruler
 class TimeRuler : public juce::Component
@@ -448,7 +491,7 @@ public:
             if (vs.tool == 1)
             {
                 app.edit->getUndoManager().beginNewTransaction (U ("Bo'lish"));
-                if (auto* ct = dynamic_cast<te::ClipTrack*> (c->getTrack())) ct->splitClip (*c, snapTime (*app.edit, vs.xToSec (e.position.x), vs));
+                if (auto* ct = dynamic_cast<te::ClipTrack*> (c->getTrack())) ct->splitClip (*c, cutPosition (*c, e.position.x).first);
             }
             if (vs.tool == 2) { app.edit->getUndoManager().beginNewTransaction (U ("O'chirish")); app.selection.deselectAll(); c->removeFromParent(); }
             if (vs.tool == 3) { app.edit->getUndoManager().beginNewTransaction ("Mute"); c->setMuted (! c->isMuted()); }
@@ -460,13 +503,16 @@ public:
             if (e.mods.isShiftDown() || e.mods.isCommandDown()) app.selection.addToSelection (c);
             else if (! app.selection.isSelected (c)) app.selection.selectOnly (c);
             drag.clip = c; drag.startTime = c->getPosition().getStart(); drag.origTrack = dynamic_cast<te::AudioTrack*> (c->getTrack());
-            drag.resizeEnd = e.position.x > clipRect (*c).getRight() - 6;
+            const auto cr = clipRect (*c);
+            drag.resizeEnd = e.position.x > cr.getRight() - 7;
+            drag.resizeStart = ! drag.resizeEnd && e.position.x < cr.getX() + 7 && cr.getWidth() > 18;
             drag.origLen = c->getPosition().getLength();
-            drag.copy = e.mods.isAltDown() && ! drag.resizeEnd;
+            drag.origOffset = c->getPosition().getOffset();
+            drag.copy = e.mods.isAltDown() && ! drag.resizeEnd && ! drag.resizeStart;
             drag.copied = false;
             drag.group.clear(); drag.groupStarts.clear();
             for (auto* sc : app.selection.getItemsOfType<te::Clip>()) { drag.group.add (sc); drag.groupStarts.add (sc->getPosition().getStart()); }
-            app.edit->getUndoManager().beginNewTransaction (drag.copy ? U ("Nusxa") : drag.resizeEnd ? U ("Uzunlik") : U ("Ko'chirish"));
+            app.edit->getUndoManager().beginNewTransaction (drag.copy ? U ("Nusxa") : (drag.resizeEnd || drag.resizeStart) ? U ("Uzunlik") : U ("Ko'chirish"));
             if (e.mods.isPopupMenu()) showClipMenu (*c);
         }
         else
@@ -511,6 +557,18 @@ public:
             const auto end = snapTime (*app.edit, (drag.startTime + drag.origLen).inSeconds() + dt, vs, false, c.get());
             if (end > drag.startTime + 0.05s) c->setEnd (end, true);
         }
+        else if (drag.resizeStart)
+        {
+            // chap chetdan qirqish: kontent joyida qoladi (offset o'zgaradi), oxiri qimirlamaydi
+            auto ns = snapTime (*app.edit, drag.startTime.inSeconds() + dt, vs, false, c.get());
+            const auto endT = drag.startTime + drag.origLen;
+            auto minStart = te::TimePosition();
+            if (dynamic_cast<te::WaveAudioClip*> (c.get()) != nullptr)
+                minStart = te::TimePosition::fromSeconds (juce::jmax (0.0, drag.startTime.inSeconds() - drag.origOffset.inSeconds() / juce::jmax (0.01, c->getSpeedRatio())));
+            ns = juce::jlimit (minStart, endT - 0.05s, ns);
+            c->setStart (ns, true, false);
+            c->setEnd (endT, false);
+        }
         else if (drag.group.size() > 1)
         {
             // bir nechta klip birga: yetakchi klip snap qilinadi, qolganlari bir xil siljiydi
@@ -542,7 +600,7 @@ public:
         {
             app.edit->getUndoManager().undoCurrentTransactionOnly();
             app.edit->getUndoManager().beginNewTransaction (U ("Bo'lish"));
-            const auto at = snapTime (*app.edit, vs.xToSec (e.mouseDownPosition.x), vs, false, drag.clip.get());
+            const auto at = cutPosition (*drag.clip, e.mouseDownPosition.x).first;
             if (auto* ct = dynamic_cast<te::ClipTrack*> (drag.clip->getTrack()))
                 if (at > drag.clip->getPosition().getStart() && at < drag.clip->getPosition().getEnd()) ct->splitClip (*drag.clip, at);
             repaint();
@@ -550,6 +608,74 @@ public:
         drag = {};
         updateCursor (e.position, e.mods);
     }
+
+    // ---------------------------------------------------------------- qaychi: zarba boshiga magnit
+    std::map<juce::String, std::vector<double>> onsetCache; std::set<juce::String> onsetPending;
+    const std::vector<double>* onsetsFor (te::WaveAudioClip& c)
+    {
+        const auto f = c.getAudioFile().getFile(); const auto key = f.getFullPathName();
+        if (auto it = onsetCache.find (key); it != onsetCache.end()) return &it->second;
+        if (onsetPending.count (key) == 0 && f.existsAsFile())
+        {
+            onsetPending.insert (key);
+            juce::Component::SafePointer<Lanes> sp (this);
+            auto* eng = &app.engine;
+            juce::Thread::launch ([sp, eng, f, key]
+            {
+                auto v = detectTransients (*eng, f);
+                juce::MessageManager::callAsync ([sp, key, v = std::move (v)]() mutable { if (sp) { sp->onsetCache[key] = std::move (v); sp->onsetPending.erase (key); sp->repaint(); } });
+            });
+        }
+        return nullptr;
+    }
+    // kesish nuqtasi: magnit yoqilgan bo'lsa yaqin zarba boshiga, aks holda gridga
+    std::pair<te::TimePosition, bool> cutPosition (te::Clip& c, float x)
+    {
+        const double t = vs.xToSec (x);
+        if (vs.transientMagnet)
+            if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&c))
+                if (auto* ons = onsetsFor (*wc))
+                {
+                    const double speed = juce::jmax (0.01, c.getSpeedRatio());
+                    const double cs = c.getPosition().getStart().inSeconds(), off = c.getPosition().getOffset().inSeconds();
+                    const double ft = (t - cs) * speed + off, tol = 16.0 / vs.pxPerSec * speed;
+                    double best = -1, bd = tol;
+                    for (double o : *ons) if (std::abs (o - ft) < bd) { bd = std::abs (o - ft); best = o; }
+                    if (best >= 0)
+                    {
+                        const double et = cs + (best - off) / speed;
+                        if (et > cs && et < c.getPosition().getEnd().inSeconds()) return { te::TimePosition::fromSeconds (et), true };
+                    }
+                }
+        return { snapTime (*app.edit, t, vs, false, &c), false };
+    }
+    struct CutHover { te::Clip::Ptr clip; float x = 0; bool magnet = false; };
+    std::optional<CutHover> cutHover;
+    void updateCutHover (te::Clip* c, float x)
+    {
+        if (c == nullptr || ! app.edit) { if (cutHover) { cutHover.reset(); repaint(); } return; }
+        auto [tp, mag] = cutPosition (*c, x);
+        cutHover = CutHover { c, vs.secToX (tp.inSeconds()), mag };
+        repaint();
+    }
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (! cutHover || cutHover->clip == nullptr) return;
+        auto r = clipRect (*cutHover->clip);
+        const float x = cutHover->x;
+        const auto col = cutHover->magnet ? juce::Colour (0xff4ad6ff) : juce::Colours::white;
+        g.setColour (col.withAlpha (0.9f)); g.fillRect (x - 0.75f, r.getY() - 2, 1.5f, r.getHeight() + 4);
+        if (cutHover->magnet)
+        {
+            // magnit belgisi
+            juce::Path m; const float mx = x - 6, my = r.getY() - 1;
+            m.startNewSubPath (mx, my); m.lineTo (mx, my + 6); m.quadraticTo (mx, my + 11, mx + 6, my + 11); m.quadraticTo (mx + 12, my + 11, mx + 12, my + 6); m.lineTo (mx + 12, my);
+            g.setColour (juce::Colour (0xff09080b).withAlpha (0.85f)); g.fillRoundedRectangle (mx - 3, my - 2, 18, 15, 4);
+            g.setColour (col); g.strokePath (m, juce::PathStrokeType (2.4f));
+            g.setColour (red); g.fillRect (mx - 1.2f, my, 2.4f, 2.2f); g.fillRect (mx + 10.8f, my, 2.4f, 2.2f);
+        }
+    }
+    void mouseExit (const juce::MouseEvent&) override { if (cutHover) { cutHover.reset(); repaint(); } }
 
     te::Clip::Ptr cloneInPlace (te::Clip& c)
     {
@@ -570,10 +696,12 @@ public:
     void updateCursor (juce::Point<float> pos, const juce::ModifierKeys& m)
     {
         auto* c = clipAt (pos);
-        if (vs.tool == 1 || (vs.tool == 0 && m.isAltDown() && ! m.isAnyMouseButtonDown())) { setMouseCursor (scissors); return; }
+        const bool cutMode = vs.tool == 1 || (vs.tool == 0 && m.isAltDown() && ! m.isAnyMouseButtonDown());
+        updateCutHover (cutMode ? c : nullptr, pos.x);
+        if (cutMode) { setMouseCursor (scissors); return; }
         if (vs.tool != 0) { setMouseCursor (c ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor); return; }
-        setMouseCursor (c && pos.x > clipRect (*c).getRight() - 6 ? juce::MouseCursor::LeftRightResizeCursor
-                                                                  : c ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+        const bool edge = c && (pos.x > clipRect (*c).getRight() - 7 || (pos.x < clipRect (*c).getX() + 7 && clipRect (*c).getWidth() > 18));
+        setMouseCursor (edge ? juce::MouseCursor::LeftRightResizeCursor : c ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
     }
     void mouseMove (const juce::MouseEvent& e) override
     {
@@ -721,7 +849,7 @@ public:
 private:
     ViewState& vs;
     bool dropHint = false;
-    struct Drag { te::Clip::Ptr clip; te::TimePosition startTime; te::TimeDuration origLen; te::AudioTrack* origTrack = nullptr; bool resizeEnd = false, copy = false, copied = false;
+    struct Drag { te::Clip::Ptr clip; te::TimePosition startTime; te::TimeDuration origLen, origOffset; te::AudioTrack* origTrack = nullptr; bool resizeEnd = false, resizeStart = false, copy = false, copied = false;
                   juce::Array<te::Clip*> group; juce::Array<te::TimePosition> groupStarts; } drag;
     std::map<te::EditItemID, std::unique_ptr<te::SmartThumbnail>> thumbs; std::map<te::EditItemID, juce::File> thumbFiles;
 
@@ -802,8 +930,35 @@ public:
         vs.selectedTrack = t->itemID;
         app.routeMidiTo (t);
         if (e.mods.isPopupMenu()) showTrackMenu (*t);
+        else { reorderTrack = t; reorderTarget = -1; }
         if (onSelectionChanged) onSelectionChanged();
         vs.changed();
+    }
+    // ---- treklarni sudrab tartibini almashtirish
+    std::function<void()> onTracksReordered;
+    te::Track::Ptr reorderTrack; int reorderTarget = -1;
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (reorderTrack == nullptr || ! app.edit || std::abs (e.getDistanceFromDragStartY()) < 6) return;
+        const int n = te::getAudioTracks (*app.edit).size();
+        reorderTarget = juce::jlimit (0, n, (int) std::floor ((e.y + vs.scrollY) / (double) vs.trackH + 0.5));
+        setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        if (reorderTrack != nullptr && reorderTarget >= 0)
+            if (auto* at = dynamic_cast<te::AudioTrack*> (reorderTrack.get()))
+                if (app.moveTrackTo (*at, reorderTarget)) { if (onTracksReordered) onTracksReordered(); vs.changed(); }
+        reorderTrack = nullptr; reorderTarget = -1; repaint();
+    }
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (reorderTarget < 0) return;
+        const float y = (float) (reorderTarget * vs.trackH - vs.scrollY);
+        g.setColour (juce::Colour (0xffff9a4a)); g.fillRoundedRectangle (4, y - 1.5f, (float) getWidth() - 8, 3, 1.5f);
+        g.fillEllipse (2, y - 4, 8, 8);
     }
 
     void mouseDoubleClick (const juce::MouseEvent& e) override

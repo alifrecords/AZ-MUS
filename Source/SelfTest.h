@@ -569,6 +569,103 @@ inline int runSelfTest (const juce::StringArray& args)
         check (bp8 != nullptr && bp8->stepVel (3, 10) > 0 && bp8->pad (0)["file"].toString() == lf.getFullPathName(), "AZ BEAT holati loyiha bilan saqlanadi");
     }
 
+    // ================= 0.7: Alt-bypass · chap chetdan qirqish · zarba magniti · trek tartibi · spektrogramma · Tap
+    {
+        auto a9 = std::make_unique<az::AppEngine>(); a9->newProject (dir.getChildFile ("t07.azmus"));
+        auto& e9 = *a9->edit; e9.tempoSequence.getTempo (0)->setBpm (120.0);
+        for (auto* t : te::getAudioTracks (e9)) e9.deleteTrack (t);
+        auto* tA = a9->addAudioTrack ("A"); auto* tB = a9->addAudioTrack ("B"); auto* tC = a9->addAudioTrack ("C");
+        // zarbali audio: 0.50, 1.25, 2.00 s da (1 kHz)
+        const auto hf = dir.getChildFile ("hits.wav");
+        {
+            const int sr = 48000, n = sr * 3; juce::AudioBuffer<float> b (2, n); b.clear();
+            for (double h : { 0.50, 1.25, 2.00 })
+                for (int i = 0; i < sr / 4; ++i) { const int at = (int) (h * sr) + i; const float v = 0.6f * std::sin ((float) (juce::MathConstants<double>::twoPi * 1000.0 * i / sr)) * std::exp (-i / (sr * 0.06f)); b.setSample (0, at, v); b.setSample (1, at, v); }
+            juce::WavAudioFormat wav; hf.deleteFile();
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (hf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n);
+        }
+        auto on = az::detectTransients (a9->engine, hf);
+        std::printf ("       zarbalar:"); for (double o : on) std::printf (" %.4f", o); std::printf ("\n");
+        check (on.size() == 3 && std::abs (on[0] - 0.5) < 0.004 && std::abs (on[1] - 1.25) < 0.004 && std::abs (on[2] - 2.0) < 0.004, "Zarba (transient) boshlanishlari aniq topildi (\xc2\xb14 ms)");
+        auto clip = tA->insertWaveClip ("hits", hf, { te::TimeRange (te::TimePosition::fromSeconds (1.0), te::TimePosition::fromSeconds (4.0)), {} }, false);
+
+        auto mc9 = std::make_unique<az::MainComponent> (*a9); mc9->setSize (1600, 900);
+        auto& ln = mc9->getLanes(); auto& gv = mc9->getViewState(); gv.pxPerSec = 100; gv.startSec = 0; gv.scrollY = 0; gv.transientMagnet = true;
+        ln.onsetCache[hf.getFullPathName()] = on;
+        // magnit: 1.25+1.0 = 2.25 s ga yaqin (2.30 s) bosilsa — aynan 2.25 s
+        auto [cut, mag] = ln.cutPosition (*clip, gv.secToX (2.30));
+        check (mag && std::abs (cut.inSeconds() - (1.0 + on[1])) < 1e-6, "Qaychi magniti: kesish zarba boshiga yopishadi");
+        gv.transientMagnet = false;
+        auto [cut2, mag2] = ln.cutPosition (*clip, gv.secToX (2.30));
+        check (! mag2 && std::abs (cut2.inSeconds() - 2.25) < 1e-6, "Magnit o'chirilsa: gridga (1/8 = 0.25 s) kesiladi");
+        gv.transientMagnet = true;
+
+        // chap chetdan qirqish
+        auto evm = [&] (juce::Point<float> p, juce::Point<float> down, juce::ModifierKeys m, bool dragged)
+        { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, m, 1.0f, 0, 0, 0, 0, &ln, &ln, juce::Time::getCurrentTime(), down, juce::Time::getCurrentTime(), 1, dragged); };
+        {
+            const auto r = ln.clipRect (*clip);
+            const juce::Point<float> d (r.getX() + 2, r.getCentreY()), m (r.getX() + 2 + 50, r.getCentreY());   // +0.5 s
+            ln.mouseDown (evm (d, d, juce::ModifierKeys(), false)); ln.mouseDrag (evm (m, d, juce::ModifierKeys(), true)); ln.mouseUp (evm (m, d, juce::ModifierKeys(), true));
+            const auto ps = clip->getPosition();
+            std::printf ("       chap chet: start %.3f, oxir %.3f, offset %.3f\n", ps.getStart().inSeconds(), ps.getEnd().inSeconds(), ps.getOffset().inSeconds());
+            check (std::abs (ps.getStart().inSeconds() - 1.5) < 1e-3 && std::abs (ps.getEnd().inSeconds() - 4.0) < 1e-3 && std::abs (ps.getOffset().inSeconds() - 0.5) < 1e-3,
+                   "Klipni chap chetidan sudrab qirqish (kontent joyida, oxiri qimirlamaydi)");
+            // ortga: asl boshidan oldinga cho'zib bo'lmaydi
+            const auto r2 = ln.clipRect (*clip);
+            const juce::Point<float> d2 (r2.getX() + 2, r2.getCentreY()), m2 (r2.getX() + 2 - 300, r2.getCentreY());
+            ln.mouseDown (evm (d2, d2, juce::ModifierKeys(), false)); ln.mouseDrag (evm (m2, d2, juce::ModifierKeys(), true)); ln.mouseUp (evm (m2, d2, juce::ModifierKeys(), true));
+            check (std::abs (clip->getPosition().getStart().inSeconds() - 1.0) < 1e-3 && std::abs (clip->getPosition().getOffset().inSeconds()) < 1e-3, "Chap chet: audioning boshidan oldinga o'tmaydi");
+        }
+        // trek tartibi
+        a9->moveTrackTo (*tA, 3);
+        auto order = te::getAudioTracks (e9);
+        check (order.size() == 3 && order[0] == tB && order[1] == tC && order[2] == tA, "Treklar tartibi almashtirildi (A oxiriga)");
+        a9->moveTrackTo (*tA, 0);
+        order = te::getAudioTracks (e9);
+        check (order[0] == tA && order[1] == tB && order[2] == tC, "Trek eng tepaga qaytarildi");
+
+        // Alt + bosish insert'da = bypass (mikser)
+        {
+            auto pl = e9.getPluginCache().createNewPlugin ("compressor", {});
+            tA->pluginList.insertPlugin (pl, az::AppEngine::userPluginCount (*tA), nullptr);
+            az::ChannelStrip st (*a9, tA); st.setSize (92, 260);
+            const auto sl = st.insSlot (0).getCentre();
+            juce::ModifierKeys alt (juce::ModifierKeys::altModifier | juce::ModifierKeys::leftButtonModifier);
+            st.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), sl, alt, 1.0f, 0, 0, 0, 0, &st, &st, juce::Time::getCurrentTime(), sl, juce::Time::getCurrentTime(), 1, false));
+            const bool off = ! pl->isEnabled();
+            st.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), sl, alt, 1.0f, 0, 0, 0, 0, &st, &st, juce::Time::getCurrentTime(), sl, juce::Time::getCurrentTime(), 1, false));
+            check (off && pl->isEnabled(), "Alt + bosish: insert plaginni o'chirish / yoqish (bypass)");
+        }
+        // spektrogramma: 1 kHz signal -> cho'qqi ~1 kHz
+        {
+            const auto sf = dir.getChildFile ("sine1k.wav");
+            { const int sr = 48000, n = sr * 2; juce::AudioBuffer<float> b (2, n);
+              for (int i = 0; i < n; ++i) { const float v = 0.5f * std::sin ((float) (juce::MathConstants<double>::twoPi * 1000.0 * i / sr)); b.setSample (0, i, v); b.setSample (1, i, v); }
+              juce::WavAudioFormat wav; sf.deleteFile();
+              if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (sf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n); }
+            tC->insertWaveClip ("sine", sf, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (2.0)), {} }, false);
+            auto* sc = az::ensureScope (*tC);
+            check (sc != nullptr && az::AppEngine::userPlugins (*tC).size() == 0, "Spektrogramma tap plagini qo'shildi (insertlar ro'yxatida ko'rinmaydi)");
+            az::SpectroPanel panel (*tC); panel.setSize (330, 240);
+            a9->exportWav (dir.getChildFile ("scope.wav"), 32);
+            for (int k = 0; k < 6; ++k) panel.timerCallback();
+            const auto& row = panel.rowAgo (0);
+            int bi = 0; for (int i = 1; i < az::SpectroPanel::bins; ++i) if (row[(size_t) i] > row[(size_t) bi]) bi = i;
+            std::printf ("       spektr cho'qqisi: %.0f Hz (%.1f dB)\n", az::SpectroPanel::binHz (bi), row[(size_t) bi]);
+            check (std::abs (std::log2 (az::SpectroPanel::binHz (bi) / 1000.0)) < 0.15 && row[(size_t) bi] > -40, "Spektrogramma real-time: 1 kHz signal to'g'ri ko'rsatildi");
+            az::removeScope (*tC);
+            check (az::findScope (*tC) == nullptr, "Spektrogramma yopilganda tap plagini olib tashlandi");
+        }
+        // Tap tempo: to'xtagan holatda darhol, 0.5 s oraliq -> 120 BPM
+        {
+            az::TempoBox tb (*a9); e9.tempoSequence.getTempo (0)->setBpm (90.0);
+            tb.tap(); juce::Thread::sleep (500); tb.tap(); juce::Thread::sleep (500); tb.tap();
+            check (std::abs (e9.tempoSequence.getTempo (0)->getBpm() - 120.0) < 2.0 && tb.tapMode, "Tap tempo (Probel bilan ham): 3 bosish -> ~120 BPM");
+        }
+        mc9.reset();
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

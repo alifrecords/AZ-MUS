@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.7.0: Alt-bypass · Tap ovozni buzmaydi · ikki chetdan qirqish · spektrogramma · zarba magniti · trek tartibi
+| Funksiya | Qanday |
+|---|---|
+| **Alt + bosish insert/send'da** | Plagin yoki send yoqiladi / o'chiriladi (bypass). Inspektor, mikser, Master va Control Room'da |
+| **Tap tempo** | Ijro paytida temp darhol o'zgarmaydi (ovoz uzilmaydi): o'lchangan BPM to'q sariq rangda ko'rinadi, to'xtatilganda yoki **Enter** bosilganda qo'llanadi. **Tap** bosilgach **Probel** bilan sanash mumkin; Esc — chiqish |
+| **Klipni ikki chetidan qirqish** | Chap va o'ng chetda ↔ kursor; chapdan qirqishda audio joyida qoladi, audioning boshidan oldinga o'tmaydi |
+| **Spektrogramma** | Mikserdagi har kanalda ≋ tugma: kanal yonida real-time panel ochiladi — **3D waterfall**, **2D** (issiqlik xaritasi) yoki **FFT** + cho'qqi; sichqoncha ostida Hz va dB; muzlatish |
+| **Zarba magniti** | Qaychi (Alt yoki 2-asbob) audioda zarba boshlanishini o'zi topadi va kesish chizig'ini unga yopishtiradi (moviy chiziq + magnit belgisi). Grid panelidagi "Magnit: zarba" bilan yoqiladi/o'chiriladi |
+| **Trek tartibi** | Trek nomini yuqoriga/pastga sudrang (to'q sariq chiziq joyni ko'rsatadi). Mikserda kanal nomini chapga/o'ngga sudrash ham ishlaydi |
+
 ## 0.6.0: AZ BEAT · mikserda Insert/Send · sample sinxroni · Alt-qaychi
 ![AZ BEAT](docs/az_beat.png)
 

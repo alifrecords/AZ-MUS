@@ -81,17 +81,18 @@ class TempoBox : public juce::Component, private juce::Timer
 public:
     explicit TempoBox (AppEngine& a) : app (a)
     {
-        for (auto* b : { &upB, &downB, &tapB, &moreB }) { addAndMakeVisible (b); b->getProperties().set ("radius", 4.0f); }
+        for (auto* b : { &upB, &downB, &tapB, &moreB }) { addAndMakeVisible (b); b->getProperties().set ("radius", 4.0f); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); }
         upB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb2")); downB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbc"));
         tapB.setButtonText ("Tap"); moreB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbe"));
         upB.setTooltip (U ("Temp +1 (Shift: +0.01)")); downB.setTooltip (U ("Temp -1 (Shift: -0.01)"));
-        tapB.setTooltip (U ("Tap tempo: ritmga 4 marta bosing"));
+        tapB.setTooltip (U ("Tap tempo: ritmga bosing yoki Tap'dan keyin Probel bilan sanang. Ijro paytida temp to'xtatilganda (yoki Enter) qo'llanadi \xe2\x80\x94 ovoz uzilmaydi"));
+        tapB.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffff9a4a).withAlpha (0.45f));
         upB.onClick = [this] { step (juce::ModifierKeys::currentModifiers.isShiftDown() ? 0.01 : 1.0); };
         downB.onClick = [this] { step (juce::ModifierKeys::currentModifiers.isShiftDown() ? -0.01 : -1.0); };
         upB.setRepeatSpeed (400, 70); downB.setRepeatSpeed (400, 70);
         tapB.onClick = [this] { tap(); };
         moreB.onClick = [this] { showMore(); };
-        startTimerHz (4);
+        startTimerHz (8);
     }
     double bpm() const { return app.edit ? app.edit->tempoSequence.getTempo (0)->getBpm() : 120.0; }
     void setBpm (double b)
@@ -103,19 +104,28 @@ public:
     }
     std::function<void()> onChanged;
     void step (double d) { setBpm (bpm() + d); }
+    // Tap tempo: ijro paytida temp DARHOL o'zgartirilmaydi (ovoz uzilmasligi uchun) —
+    // o'lchangan qiymat ko'rsatiladi va to'xtatilganda yoki Enter bosilganda qo'llanadi.
+    // Tap rejimi: Tap tugmasi bosilgach Probel (Space) ham "tap" bo'ladi; Esc yoki 4 s jimlik — chiqish.
+    bool tapMode = false;
+    double pendingBpm = 0;
     void tap()
     {
         const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
         if (! taps.isEmpty() && now - taps.getLast() > 2.0) taps.clear();
-        taps.add (now);
-        while (taps.size() > 6) taps.remove (0);
+        taps.add (now); lastTap = now; tapMode = true;
+        while (taps.size() > 8) taps.remove (0);
         if (taps.size() >= 2)
         {
             const double avg = (taps.getLast() - taps.getFirst()) / (taps.size() - 1);
-            if (avg > 0.15) setBpm (std::round (60.0 / avg * 100.0) / 100.0);
+            if (avg > 0.15) pendingBpm = std::round (60.0 / avg * 100.0) / 100.0;
+            if (! isPlaying()) applyPending();
         }
-        tapFlash = 3; repaint();
+        tapFlash = 3; tapB.setToggleState (true, juce::dontSendNotification); repaint();
     }
+    bool isPlaying() const { return app.edit && app.edit->getTransport().isPlaying(); }
+    void applyPending() { if (pendingBpm > 0) { setBpm (pendingBpm); pendingBpm = 0; } }
+    void exitTapMode() { tapMode = false; taps.clear(); tapB.setToggleState (false, juce::dontSendNotification); repaint(); }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 7);
@@ -134,7 +144,12 @@ public:
         g.setColour (Colours::white.withAlpha (0.08f)); g.drawRoundedRectangle (r, 10, 1);
         caps (g, "TEMP", { bpmArea.getX() + 22, 3, 60, 10 }, 8.5f);
         label (g, String::fromUTF8 ("\xe2\x99\xa9"), bpmArea.withWidth (20).translated (2, 4), 15, tapFlash > 0 ? red : silver, Justification::centred, 600);
-        label (g, String (bpm(), 3), bpmArea.withTrimmedLeft (22).translated (0, 5), 15, Colours::white, Justification::centredLeft, 700);
+        if (pendingBpm > 0)
+        {
+            label (g, String (pendingBpm, 2), bpmArea.withTrimmedLeft (22).translated (0, 5), 15, Colour (0xffff9a4a), Justification::centredLeft, 700);
+            label (g, U ("TAP \xc2\xb7 Enter = qo'llash"), { bpmArea.getX() + 50, 3, 120, 10 }, 7.5f, Colour (0xffff9a4a), Justification::centredLeft, 600);
+        }
+        else label (g, String (bpm(), 3), bpmArea.withTrimmedLeft (22).translated (0, 5), 15, tapMode ? Colour (0xffff9a4a) : Colours::white, Justification::centredLeft, 700);
         caps (g, U ("O'LCHOV"), { sigArea.getX(), 3, 60, 10 }, 8.5f);
         if (app.edit) if (auto* sg = app.edit->tempoSequence.getTimeSig (0))
             label (g, String (sg->numerator) + "/" + String (sg->denominator), sigArea.translated (0, 5), 14, text, Justification::centredLeft, 600);
@@ -157,6 +172,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (! app.edit || ! bpmArea.contains (e.position)) return;
+        if (pendingBpm > 0) { applyPending(); return; }
         auto* w = new juce::AlertWindow (U ("Temp (BPM)"), {}, juce::MessageBoxIconType::NoIcon);
         w->addTextEditor ("b", juce::String (bpm(), 3));
         w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey)); w->addButton (U ("Bekor"), 0);
@@ -181,9 +197,14 @@ public:
         });
     }
 private:
-    void timerCallback() override { if (tapFlash > 0 && --tapFlash == 0) repaint(); }
+    void timerCallback() override
+    {
+        if (tapFlash > 0 && --tapFlash == 0) repaint();
+        if (pendingBpm > 0 && ! isPlaying()) applyPending();
+        if (tapMode && juce::Time::getMillisecondCounterHiRes() / 1000.0 - lastTap > 4.0 && pendingBpm <= 0) exitTapMode();
+    }
     AppEngine& app; juce::TextButton upB, downB, tapB, moreB;
-    juce::Rectangle<float> bpmArea, sigArea; juce::Array<double> taps; double dragStart = 120; int tapFlash = 0;
+    juce::Rectangle<float> bpmArea, sigArea; juce::Array<double> taps; double dragStart = 120, lastTap = 0; int tapFlash = 0;
 };
 
 // =============================================================================  Grid paneli (Logic X tuzilmasi + Cubase bo'linmalari)
@@ -194,7 +215,11 @@ public:
     std::function<void()> onQuantize, onChanged;
     GridBar (AppEngine& a, ViewState& v) : app (a), vs (v)
     {
-        for (auto* b : { &gridB, &snapTypeB, &qB, &qApplyB, &fmtB }) { addAndMakeVisible (b); b->getProperties().set ("radius", 5.0f); }
+        for (auto* b : { &gridB, &snapTypeB, &qB, &qApplyB, &fmtB, &magB }) { addAndMakeVisible (b); b->getProperties().set ("radius", 5.0f); }
+        magB.setButtonText (U ("Magnit: zarba")); magB.setClickingTogglesState (true);
+        magB.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4ad6ff).withAlpha (0.35f));
+        magB.setTooltip (U ("Qaychi (Alt yoki 2-asbob) audiodagi zarba boshiga yopishadi. O'chirsangiz \xe2\x80\x94 gridga"));
+        magB.onClick = [this] { vs.transientMagnet = magB.getToggleState(); changed(); };
         gridB.setTooltip (U ("Grid: bo'linma (Smart \xc2\xb7 Bar \xc2\xb7 Beat \xc2\xb7 1/1 \xe2\x80\xa6 1/128, Triplet, Dotted)"));
         snapTypeB.setTooltip (U ("Snap turi")); qB.setTooltip (U ("Quantize qiymati")); qApplyB.setTooltip (U ("Tanlanganlarni quantize qilish (Q)"));
         fmtB.setTooltip (U ("Vaqt formati"));
@@ -214,6 +239,7 @@ public:
         qB.setButtonText (juce::String ("Q  ") + (vs.linkQ ? vs.gridName() : ViewState::divisionName (vs.quantize)) + juce::String::fromUTF8 ("  \xe2\x96\xbe"));
         const char* fm[] = { "Bars+Beats", "Seconds", "Timecode", "Samples" };
         fmtB.setButtonText (juce::String (fm[vs.timeFormat]) + juce::String::fromUTF8 ("  \xe2\x96\xbe"));
+        magB.setToggleState (vs.transientMagnet, juce::dontSendNotification);
         repaint();
     }
     double quantizeBeats() const { return vs.linkQ ? vs.gridBeats (*app.edit) : vs.quantize; }
@@ -294,14 +320,15 @@ public:
         snapTypeB.setBounds (r.removeFromLeft (128)); r.removeFromLeft (14);
         qB.setBounds (r.removeFromLeft (92)); r.removeFromLeft (4);
         qApplyB.setBounds (r.removeFromLeft (30)); r.removeFromLeft (14);
-        fmtB.setBounds (r.removeFromLeft (112));
+        fmtB.setBounds (r.removeFromLeft (112)); r.removeFromLeft (14);
+        magB.setBounds (r.removeFromLeft (120));
     }
     void paint (juce::Graphics& g) override
     {
         g.fillAll (juce::Colour (0xff0b0a0d));
         g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0, (float) getWidth());
     }
-    juce::TextButton gridB, snapTypeB, qB, qApplyB, fmtB;
+    juce::TextButton gridB, snapTypeB, qB, qApplyB, fmtB, magB;
 private:
     void changed() { refresh(); vs.changed(); if (onChanged) onChanged(); }
     AppEngine& app; ViewState& vs;
@@ -456,6 +483,7 @@ inline void showPluginMenu (AppEngine& app, te::AudioTrack& t, std::function<voi
 class Inspector : public juce::Component, private juce::Timer
 {
 public:
+    std::function<void()> onPluginToggled;
     Inspector (AppEngine& a, ViewState& v) : app (a), vs (v)
     {
         for (auto* s : { &vol, &pan })
@@ -591,6 +619,7 @@ public:
             if (sendRows[i].contains (e.position))
             {
                 if (i == ss.size()) { showSendMenu (*t); return; }
+                if (e.mods.isAltDown()) { ss[i]->setEnabled (! ss[i]->isEnabled()); refresh(); if (onPluginToggled) onPluginToggled(); return; }
                 if (e.mods.isPopupMenu())
                 {
                     te::Plugin::Ptr p (ss[i]);
@@ -616,6 +645,7 @@ public:
                     return;
                 }
                 te::Plugin::Ptr p (plugs[i]);
+                if (e.mods.isAltDown()) { p->setEnabled (! p->isEnabled()); refresh(); if (onPluginToggled) onPluginToggled(); return; }   // Alt+bosish = bypass
                 if (e.mods.isPopupMenu())
                 {
                     juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
@@ -735,6 +765,7 @@ inline te::Plugin::Ptr insertMaster (AppEngine& app, const PickItem& it)
 class ChannelStrip : public juce::Component
 {
 public:
+    te::AudioTrack* getTrack() const { return track; }
     ChannelStrip (AppEngine& a, te::AudioTrack* t) : app (a), track (t)
     {
         fader.setSliderStyle (juce::Slider::LinearVertical); fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -768,10 +799,19 @@ public:
         fader.setBounds (8, faderY(), 30, getHeight() - faderY() - 46);
     }
     std::function<void()> onRoutingChanged;
+    std::function<void (ChannelStrip&)> onToggleSpectro;
+    std::function<void (ChannelStrip&, int)> onReorderDrag;     // mikser koordinatasidagi x
+    std::function<void (ChannelStrip&)> onReorderEnd;
+    bool spectroOpen = false, reordering = false;
+    juce::Rectangle<float> specBtn() const { return { (float) getWidth() - 24, (float) panY() + 9, 18, 16 }; }
+    bool inNameArea (juce::Point<float> p) const { return p.y > getHeight() - 40; }
     juce::Rectangle<float> insSlot (int i) const  { return { 6, 4.0f + (float) i * 15.0f, (float) getWidth() - 12, 13 }; }
     juce::Rectangle<float> sendSlot (int i) const { return { 6, 52.0f + (float) i * 15.0f, (float) getWidth() - 12, 13 }; }
     void trackMouseDown (const juce::MouseEvent& e)
     {
+        reordering = false;
+        if (specBtn().contains (e.position)) { if (onToggleSpectro) onToggleSpectro (*this); return; }
+        if (inNameArea (e.position) && ! e.mods.isPopupMenu()) { reordering = true; return; }
         auto plugs = AppEngine::userPlugins (*track);
         juce::Component::SafePointer<ChannelStrip> sp (this);
         te::Track::Ptr tp (track);
@@ -781,6 +821,7 @@ public:
             if (i < plugs.size())
             {
                 te::Plugin::Ptr p (plugs[i]);
+                if (e.mods.isAltDown()) { p->setEnabled (! p->isEnabled()); changed(); return; }   // Alt+bosish = bypass
                 if (! e.mods.isPopupMenu()) { p->showWindowExplicitly(); return; }
                 juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
                 m.addItem (1, U ("Oynasini ochish")); m.addItem (2, p->isEnabled() ? "Bypass" : U ("Yoqish"));
@@ -818,6 +859,7 @@ public:
             if (i < ss.size())
             {
                 auto* snd = ss[i];
+                if (e.mods.isAltDown()) { snd->setEnabled (! snd->isEnabled()); changed(); return; }
                 if (e.mods.isPopupMenu())
                 {
                     te::Plugin::Ptr p (snd);
@@ -874,11 +916,22 @@ public:
     void changed (bool structural = false) { repaint(); if (onRoutingChanged && structural) onRoutingChanged(); else if (onRoutingChanged) onRoutingChanged(); }
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (reordering && std::abs (e.getDistanceFromDragStartX()) > 6)
+        {
+            setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+            if (onReorderDrag && getParentComponent()) onReorderDrag (*this, e.getEventRelativeTo (getParentComponent()).x);
+            return;
+        }
         if (dragSend == nullptr) return;
         dragSend->setGainDb ((float) juce::jlimit (-60.0, 6.0, dragStartDb + e.getDistanceFromDragStartX() * 0.25 - e.getDistanceFromDragStartY() * 0.25));
         repaint();
     }
-    void mouseUp (const juce::MouseEvent&) override { dragSend = nullptr; }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        dragSend = nullptr;
+        if (reordering && std::abs (e.getDistanceFromDragStartX()) > 6 && onReorderEnd) { setMouseCursor (juce::MouseCursor::NormalCursor); onReorderEnd (*this); }
+        reordering = false;
+    }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (track == nullptr) return;
@@ -911,6 +964,7 @@ public:
             if (i < plugs.size())
             {
                 te::Plugin::Ptr p (plugs[i]);
+                if (e.mods.isAltDown()) { p->setEnabled (! p->isEnabled()); repaint(); return; }
                 if (! e.mods.isPopupMenu()) { p->showWindowExplicitly(); return; }
                 juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
                 m.addItem (1, U ("Oynasini ochish")); m.addItem (2, p->isEnabled() ? "Bypass" : U ("Yoqish"));
@@ -972,6 +1026,14 @@ public:
                     label (g, String (ss[i]->getGainDb(), 1), s.reduced (4, 0), 8, silver, Justification::centredRight, 500);
                 }
                 else label (g, add ? U ("+ Send") : String::fromUTF8 ("\xe2\x80\x94"), s.reduced (5, 0), 8.5f, add ? silver : dim2, Justification::centredLeft, 400);
+            }
+            // spektrogramma tugmasi
+            {
+                auto sb = specBtn();
+                g.setColour (spectroOpen ? Colour (0xff4ad6ff).withAlpha (0.3f) : Colours::white.withAlpha (0.05f)); g.fillRoundedRectangle (sb, 3);
+                Path w; for (int k = 0; k < 3; ++k) { const float yy = sb.getBottom() - 3 - k * 3.2f, xo = k * 1.6f;
+                    w.startNewSubPath (sb.getX() + 3 + xo, yy); w.lineTo (sb.getX() + 7 + xo, yy - 4); w.lineTo (sb.getX() + 10 + xo, yy - 1.5f); w.lineTo (sb.getRight() - 3 - (2 - k) * 1.0f, yy - 5); }
+                g.setColour (spectroOpen ? Colour (0xff4ad6ff) : silver); g.strokePath (w, PathStrokeType (1.0f));
             }
         }
         else
@@ -1106,6 +1168,7 @@ public:
             if (i < plugs.size())
             {
                 te::Plugin::Ptr p (plugs[i]);
+                if (e.mods.isAltDown()) { p->setEnabled (! p->isEnabled()); repaint(); return; }
                 if (! e.mods.isPopupMenu()) { p->showWindowExplicitly(); return; }
                 juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
                 m.addItem (1, U ("Oynasini ochish")); m.addItem (2, p->isEnabled() ? "Bypass" : U ("Yoqish"));
@@ -1193,6 +1256,14 @@ public:
     std::function<void (te::EditItemID, float)> onTrackLevel;
     std::function<void()> onDetach;          // alohida oynaga ajratish / qaytarish
     std::function<void()> onRoutingChanged;  // insert/send o'zgardi (inspektor yangilanadi)
+    std::function<void()> onTracksReordered;
+    void toggleSpectro (te::AudioTrack& t)
+    {
+        const bool open = ! (bool) t.state.getProperty ("azSpec", false);
+        t.state.setProperty ("azSpec", open, nullptr);
+        if (! open) removeScope (t);
+        rebuild();
+    }
     void rebuildIfNeeded()
     {
         if (! app.edit) return;
@@ -1217,12 +1288,29 @@ public:
     }
     void rebuild()
     {
-        strips.clear(); ids.clear(); master.reset(); croom.reset();
+        specs.clear(); strips.clear(); ids.clear(); master.reset(); croom.reset();
         if (! app.edit) return;
         for (auto* t : te::getAudioTracks (*app.edit))
         {
             auto* s = strips.add (new ChannelStrip (app, t)); holder.addAndMakeVisible (s); ids.add (t->itemID);
             s->onRoutingChanged = [this] { juce::Component::SafePointer<Mixer> sp (this); juce::MessageManager::callAsync ([sp] { if (sp) { sp->rebuildIfNeeded(); if (sp->onRoutingChanged) sp->onRoutingChanged(); } }); };
+            s->spectroOpen = t->state.getProperty ("azSpec", false);
+            te::Track::Ptr tp (t);
+            s->onToggleSpectro = [this, tp] (ChannelStrip&) { juce::Component::SafePointer<Mixer> sp (this); juce::MessageManager::callAsync ([sp, tp] { if (sp) if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) sp->toggleSpectro (*at); }); };
+            s->onReorderDrag = [this] (ChannelStrip&, int x) { dropX = x; dropIndex = indexForX (x); holder.repaint(); repaint(); };
+            s->onReorderEnd = [this, tp] (ChannelStrip&)
+            {
+                const int target = dropIndex; dropIndex = -1;
+                juce::Component::SafePointer<Mixer> sp (this);
+                juce::MessageManager::callAsync ([sp, tp, target]
+                {
+                    if (! sp) return;
+                    if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (sp->app.moveTrackTo (*at, target)) { sp->rebuild(); if (sp->onTracksReordered) sp->onTracksReordered(); }
+                    sp->repaint();
+                });
+            };
+            if (s->spectroOpen) { auto* sp = specs.add (new SpectroPanel (*t)); holder.addAndMakeVisible (sp); te::Track::Ptr tq (t);
+                                  sp->onClose = [this, tq] { juce::Component::SafePointer<Mixer> m (this); juce::MessageManager::callAsync ([m, tq] { if (m) if (auto* at = dynamic_cast<te::AudioTrack*> (tq.get())) m->toggleSpectro (*at); }); }; }
         }
         master = std::make_unique<ChannelStrip> (app, nullptr); addAndMakeVisible (*master);
         croom = std::make_unique<ControlRoomStrip> (app); addAndMakeVisible (*croom);
@@ -1237,8 +1325,16 @@ public:
         if (master) master->setBounds (r.removeFromRight (104));
         r.removeFromRight (10);
         vp.setBounds (r);
-        holder.setSize (juce::jmax (r.getWidth(), strips.size() * 98), r.getHeight() - 8);
-        for (int i = 0; i < strips.size(); ++i) strips[i]->setBounds (i * 98, 0, 92, holder.getHeight());
+        int x = 0;
+        stripX.clear();
+        for (int i = 0; i < strips.size(); ++i)
+        {
+            stripX.add (x);
+            strips[i]->setBounds (x, 0, 92, r.getHeight() - 8); x += 98;
+            for (auto* sp : specs) if (sp->getTrack() == strips[i]->getTrack()) { sp->setBounds (x - 2, 0, 330, r.getHeight() - 8); x += 336; }
+        }
+        stripX.add (x);
+        holder.setSize (juce::jmax (r.getWidth(), x), r.getHeight() - 8);
     }
     void paint (juce::Graphics& g) override
     {
@@ -1259,6 +1355,20 @@ private:
     juce::OwnedArray<ChannelStrip> strips; juce::Array<te::EditItemID> ids; std::unique_ptr<ChannelStrip> master;
     std::unique_ptr<ControlRoomStrip> croom;
     juce::TextButton detachB; bool dragFromEdge = false;
+    juce::OwnedArray<SpectroPanel> specs;
+    juce::Array<int> stripX; int dropIndex = -1, dropX = 0;
+    int indexForX (int x) const
+    {
+        for (int i = 0; i < strips.size(); ++i) if (x < stripX[i] + 46) return i;
+        return strips.size();
+    }
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (dropIndex < 0) return;
+        const int hx = dropIndex < stripX.size() ? stripX[dropIndex] - 3 : 0;
+        auto p = vp.getBounds().getPosition() + juce::Point<int> (hx - vp.getViewPositionX(), 0);
+        g.setColour (juce::Colour (0xffff9a4a)); g.fillRoundedRectangle ((float) p.x - 1.5f, (float) p.y, 3.0f, (float) vp.getHeight() - 8, 1.5f);
+    }
 public:
     ControlRoomStrip* controlRoomStrip() { return croom.get(); }
 };

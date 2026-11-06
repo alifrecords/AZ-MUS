@@ -294,7 +294,24 @@ public:
     static bool isUserPlugin (te::Plugin* p)
     {
         return dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr
-            && dynamic_cast<te::AuxSendPlugin*> (p) == nullptr && dynamic_cast<te::AuxReturnPlugin*> (p) == nullptr;
+            && dynamic_cast<te::AuxSendPlugin*> (p) == nullptr && dynamic_cast<te::AuxReturnPlugin*> (p) == nullptr
+            && p->getPluginType() != "azscope";
+    }
+    // treklarni qayta tartiblash: audio treklar ro'yxatida `target` joyiga (0..n)
+    bool moveTrackTo (te::AudioTrack& t, int target)
+    {
+        if (! edit) return false;
+        auto ts = te::getAudioTracks (*edit);
+        const int from = ts.indexOf (&t);
+        target = juce::jlimit (0, ts.size(), target);
+        if (from < 0 || target == from || target == from + 1) return false;
+        edit->getUndoManager().beginNewTransaction ("Trek tartibi");
+        if (target > 0) { edit->moveTrack (&t, te::TrackInsertPoint (nullptr, ts[target - 1])); return true; }
+        // eng tepaga: avval birinchi trekdan keyinga, so'ng birinchi trekni bizdan keyinga
+        te::Track::Ptr first (ts[0]);
+        if (from != 1) edit->moveTrack (&t, te::TrackInsertPoint (nullptr, first.get()));
+        edit->moveTrack (first, te::TrackInsertPoint (nullptr, &t));
+        return true;
     }
     // insert joyi: volume (fader) plaginidan oldin = pre-fader
     static int userPluginCount (te::AudioTrack& t)

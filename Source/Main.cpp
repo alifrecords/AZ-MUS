@@ -301,6 +301,7 @@ private:
                         if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
                         if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
                         if (args.contains ("--beat")) zh->main.addBeat();
+                        if (args.contains ("--spec")) if (auto* t = te::getAudioTracks (*app->edit)[0]) zh->main.getMixer().toggleSpectro (*t);
                         if (args.contains ("--picker"))
                             az::showPluginPicker (*app, zh->main.localAreaToGlobal (juce::Rectangle<int> (110, 200, 120, 26)), [] (const az::PickItem&) {});
                     }

@@ -6,6 +6,7 @@
 #include "AppEngine.h"
 #include "MonitorMatchEngine.h"
 #include "Beat.h"
+#include "Scope.h"
 
 namespace az
 {
@@ -184,6 +185,7 @@ inline void registerAzPlugins (te::Engine& e)
     e.getPluginManager().createBuiltInType<ControlRoomPlugin>();
     e.getPluginManager().createBuiltInType<MonitorMatchPlugin>();
     e.getPluginManager().createBuiltInType<AzBeatPlugin>();
+    e.getPluginManager().createBuiltInType<ScopeTapPlugin>();
 }
 
 // AZ BEAT treki: standart kit va boshlang'ich pattern bilan

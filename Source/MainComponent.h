@@ -50,7 +50,10 @@ inline const KeyHelp keyHelp[] = {
     { "Q",                    "Quantize (tanlangan kliplar / MIDI notalar)" },
     { "Ctrl+Alt+B",           "Render Selection (Dry / Channel / Complete Signal Path)" },
     { "Mikser \xe2\x86\x97 / chetidan sudrash", "Mikserni alohida oynaga ajratish" },
-    { "Alt (bosib turish)",   "Qaychi: bosilgan joyda kesish, sudrash \xe2\x80\x94 nusxa (Cubase)" },
+    { "Alt (bosib turish)",   "Qaychi: bosilgan joyda kesish (zarba boshiga magnit), sudrash \xe2\x80\x94 nusxa (Cubase)" },
+    { "Alt + insert/send",    "Plaginni yoqish / o'chirish (bypass)" },
+    { "Tap, so'ng Probel",    "Temp sanash; ijroda Enter yoki to'xtatilganda qo'llanadi" },
+    { "Trek nomini sudrash",  "Treklar tartibini almashtirish (mikserda ham)" },
 };
 
 class MainComponent : public juce::Component, public juce::MenuBarModel, public juce::DragAndDropContainer, private juce::ChangeListener, private juce::Timer
@@ -109,6 +112,9 @@ public:
         mixer.onDetach = [this] { toggleMixerWindow(); };
         mixer.onRoutingChanged = [this] { inspector.refresh(); headers.repaint(); lanes.repaint(); };
         headers.onAddTrack = [this] { showAddTrackMenu(); };
+        headers.onTracksReordered = [this] { mixer.rebuild(); refreshAll(); };
+        mixer.onTracksReordered = [this] { refreshAll(); };
+        inspector.onPluginToggled = [this] { mixer.rebuildIfNeeded(); };
         lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); };
 
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
@@ -116,6 +122,7 @@ public:
         vs.gridMode = pf.getIntValue ("azGridMode", ViewState::gridDivision); vs.division = pf.getDoubleValue ("azGridDiv", 0.5);
         vs.snapType = pf.getIntValue ("azSnapType", 0); vs.timeFormat = pf.getIntValue ("azTimeFmt", 0); vs.fps = pf.getIntValue ("azFps", 25);
         vs.quantize = pf.getDoubleValue ("azQuant", 0.5); vs.linkQ = pf.getBoolValue ("azLinkQ", true);
+        vs.transientMagnet = pf.getBoolValue ("azMagnet", true);
         gridBar.refresh();
         top.setPanels (showInsp, showMedia, showMixer);
 
@@ -137,7 +144,7 @@ public:
     {
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
         pf.setValue ("azGridMode", vs.gridMode); pf.setValue ("azGridDiv", vs.division); pf.setValue ("azSnapType", vs.snapType);
-        pf.setValue ("azTimeFmt", vs.timeFormat); pf.setValue ("azFps", vs.fps); pf.setValue ("azQuant", vs.quantize); pf.setValue ("azLinkQ", vs.linkQ);
+        pf.setValue ("azTimeFmt", vs.timeFormat); pf.setValue ("azFps", vs.fps); pf.setValue ("azQuant", vs.quantize); pf.setValue ("azLinkQ", vs.linkQ); pf.setValue ("azMagnet", vs.transientMagnet);
     }
 
     // ---------------------------------------------------------------- Quantize (Q)
@@ -441,6 +448,13 @@ public:
         if (code == KP::F3Key) { togglePanel (2); return true; }
         if (code == KP::F4Key) { showConnections(); return true; }
         if (code == KP::F7Key) { openDop(); return true; }
+        // Tap rejimi: Probel = tap, Enter = qo'llash, Esc = chiqish
+        if (auto& tb = top.getTempo(); tb.tapMode)
+        {
+            if (code == KP::spaceKey) { tb.tap(); return true; }
+            if (code == KP::returnKey) { tb.applyPending(); tb.exitTapMode(); return true; }
+            if (code == KP::escapeKey) { tb.pendingBpm = 0; tb.exitTapMode(); return true; }
+        }
         if (ctrl && alt && code == 'B') { openRender(); return true; }
         if (ctrl && (k.getTextCharacter() == '=' || k.getTextCharacter() == '+' || code == KP::numberPadAdd)) { if (onUiZoom) onUiZoom (1); return true; }
         if (ctrl && (k.getTextCharacter() == '-' || code == KP::numberPadSubtract)) { if (onUiZoom) onUiZoom (-1); return true; }
@@ -697,6 +711,7 @@ public:
     std::function<void (int)> onUiZoom;
     Lanes& getLanes() { return lanes; }
     ViewState& getViewState() { return vs; }
+    Mixer& getMixer() { return mixer; }
     void setUiZoomLabel (float s) { top.uiScale = s; top.repaint(); }
 
     void showPluginManager()
