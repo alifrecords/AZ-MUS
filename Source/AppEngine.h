@@ -31,6 +31,68 @@ struct PluginEditorContent : public te::Plugin::EditorComponent
     std::unique_ptr<juce::AudioProcessorEditor> editor;
 };
 
+// plagin oynalaridan DAW'ga: transport va klavishlar (oyna ochiq bo'lsa ham Play ishlashi uchun)
+inline std::function<void (int)> pluginWindowTransport;            // 0 = play/stop, 1 = stop, 2 = boshiga
+inline std::function<bool (const juce::KeyPress&)> pluginWindowKeys;
+inline std::function<bool()> pluginWindowIsPlaying;
+inline bool pluginWindowPinDefault = true;
+
+// plagin oynasi tepasidagi panel: ▶ ■ |◀  ·  nom  ·  ✓ Qotirish
+class PluginFrame : public juce::Component, private juce::Timer
+{
+public:
+    static constexpr int barH = 30;
+    PluginFrame (juce::Component& c, juce::DocumentWindow& w) : content (c), window (w)
+    {
+        addAndMakeVisible (content);
+        for (auto* b : { &playB, &stopB, &startB, &pinB })
+        { addAndMakeVisible (b); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); b->getProperties().set ("radius", 5.0f); }
+        playB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb6")); stopB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xa0"));
+        startB.setButtonText (juce::String::fromUTF8 ("|\xe2\x97\x80"));
+        playB.onClick  = [] { if (pluginWindowTransport) pluginWindowTransport (0); };
+        stopB.onClick  = [] { if (pluginWindowTransport) pluginWindowTransport (1); };
+        startB.onClick = [] { if (pluginWindowTransport) pluginWindowTransport (2); };
+        playB.setTooltip (juce::String::fromUTF8 ("Play / Stop (Probel)"));
+        pinB.setClickingTogglesState (true);
+        pinB.setToggleState (pluginWindowPinDefault, juce::dontSendNotification);
+        pinB.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff1f9d5c));
+        pinB.setTooltip (juce::String::fromUTF8 ("Qotirish: yoqilsa oyna DAW ustida qoladi (DAW'ni bossangiz ham yo'qolmaydi)"));
+        pinB.onClick = [this] { pluginWindowPinDefault = pinB.getToggleState(); applyPin(); };
+        updatePinText();
+        content.setTopLeftPosition (0, barH);
+        setSize (juce::jmax (360, content.getWidth()), content.getHeight() + barH);
+        startTimerHz (6);
+    }
+    void applyPin() { window.setAlwaysOnTop (pinB.getToggleState()); updatePinText(); }
+    void updatePinText() { pinB.setButtonText (juce::String::fromUTF8 (pinB.getToggleState() ? "\xe2\x9c\x93 Qotirilgan" : "Qotirish")); }
+    void childBoundsChanged (juce::Component* c) override
+    {
+        if (c == &content && ! resizing) { resizing = true; setSize (juce::jmax (360, content.getWidth()), content.getHeight() + barH); resizing = false; }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().removeFromTop (barH).reduced (6, 4);
+        startB.setBounds (r.removeFromLeft (30)); r.removeFromLeft (3);
+        playB.setBounds (r.removeFromLeft (34)); r.removeFromLeft (3);
+        stopB.setBounds (r.removeFromLeft (30));
+        pinB.setBounds (r.removeFromRight (110));
+        if (! resizing && content.getY() != barH) content.setTopLeftPosition (0, barH);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.setColour (juce::Colour (0xff0e0c10)); g.fillRect (getLocalBounds().removeFromTop (barH));
+        g.setColour (juce::Colours::white.withAlpha (0.07f)); g.drawHorizontalLine (barH - 1, 0, (float) getWidth());
+    }
+    void timerCallback() override
+    {
+        const bool pl = pluginWindowIsPlaying && pluginWindowIsPlaying();
+        if (pl != wasPlaying) { wasPlaying = pl; playB.setColour (juce::TextButton::buttonColourId, pl ? juce::Colour (0xff1f9d5c) : juce::Colour (0xff1a181d)); }
+    }
+    juce::TextButton playB, stopB, startB, pinB;
+private:
+    juce::Component& content; juce::DocumentWindow& window; bool resizing = false, wasPlaying = false;
+};
+
 class PluginWindow : public juce::DocumentWindow
 {
 public:
@@ -42,17 +104,21 @@ public:
             content = std::make_unique<PluginEditorContent> (*ext);
         else
             content = p.createEditor();
-        if (content) setContentNonOwned (content.get(), true);
+        if (content) { frame = std::make_unique<PluginFrame> (*content, *this); setContentNonOwned (frame.get(), true); frame->applyPin(); }
         setResizable (false, false);
         setBoundsConstrained (getLocalBounds() + plugin.windowState->choosePositionForPluginWindow());
         setVisible (true); toFront (true);
     }
-    ~PluginWindow() override { plugin.edit.flushPluginStateIfNeeded (plugin); clearContentComponent(); content.reset(); }
+    ~PluginWindow() override { plugin.edit.flushPluginStateIfNeeded (plugin); clearContentComponent(); frame.reset(); content.reset(); }
     void closeButtonPressed() override { plugin.windowState->closeWindowExplicitly(); }
     void moved() override { plugin.windowState->lastWindowBounds = getBounds(); }
+    // plagin ishlatmagan klavishlar (Probel, Enter, raqamlar ...) DAW'ga uzatiladi
+    bool keyPressed (const juce::KeyPress& k) override { return pluginWindowKeys ? pluginWindowKeys (k) : false; }
+    PluginFrame* getFrame() { return frame.get(); }
 private:
     te::Plugin& plugin;
     std::unique_ptr<juce::Component> content;
+    std::unique_ptr<PluginFrame> frame;
 };
 
 inline bool headlessMode = false;

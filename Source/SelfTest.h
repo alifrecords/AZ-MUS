@@ -666,6 +666,93 @@ inline int runSelfTest (const juce::StringArray& args)
         mc9.reset();
     }
 
+    // ================= 0.8: AZ BEAT normalize/delay/browse/moslik · plagin oynasi transporti · AUTO LVL
+    {
+        auto a10 = std::make_unique<az::AppEngine>(); a10->newProject (dir.getChildFile ("t08.azmus"));
+        auto& e10 = *a10->edit; e10.tempoSequence.getTempo (0)->setBpm (120.0); e10.state.setProperty ("azKey", "A minor", nullptr);
+        for (auto* t : te::getAudioTracks (e10)) e10.deleteTrack (t);
+        auto sdir = dir.getChildFile ("smp"); sdir.deleteRecursively(); sdir.createDirectory();
+        auto writeTone = [&] (const juce::File& f, double hz, float amp, double dur, bool decay)
+        {
+            const int sr = 48000, n = (int) (sr * dur); juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i) { const float v = amp * std::sin ((float) (juce::MathConstants<double>::twoPi * hz * i / sr)) * (decay ? std::exp (-i / (sr * 0.15f)) : 1.0f); b.setSample (0, i, v); b.setSample (1, i, v); }
+            juce::WavAudioFormat wav;
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n);
+        };
+        const auto quiet = sdir.getChildFile ("01 quiet kick.wav"), s808g = sdir.getChildFile ("02 808 G.wav"), s808fs = sdir.getChildFile ("03 808 Fsharp.wav");
+        writeTone (quiet, 60, 0.05f, 0.4, true); writeTone (s808g, 98.0, 0.7f, 0.8, true); writeTone (s808fs, 92.5, 0.7f, 0.8, true);
+        writeTone (sdir.getChildFile ("Pad_Loop_120bpm_Am.wav"), 220, 0.3f, 8.0, false);
+
+        auto* bt = az::addBeatTrack (*a10); auto* bp = az::beatPluginOf (*bt);
+        for (int p = 0; p < 16; ++p) { bp->pad (p).setProperty ("steps", juce::String::repeatedString ("0,", 64), nullptr); bp->clearPad (p); }
+        bp->loadSample (0, quiet); bp->setStep (0, 4, 127);          // 4-step = 0.5 s
+        bt->insertMIDIClip (te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (2.0)), nullptr);
+        auto renderInfo = [&] (const char* name, float& rms, double& onset)
+        {
+            const auto f = dir.getChildFile (name); a10->exportWav (f, 32);
+            juce::AudioBuffer<float> b; double sr = 48000; az::dop::readFile (a10->engine, f, b, sr);
+            rms = juce::Decibels::gainToDecibels (b.getMagnitude (0, b.getNumSamples()), -200.0f);
+            onset = -1; for (int i = 0; i < b.getNumSamples(); ++i) if (std::abs (b.getSample (0, i)) > 0.002f) { onset = i / sr; break; }
+        };
+        float pk0, pk1, pk2; double on0, on1, on2;
+        renderInfo ("b_plain.wav", pk0, on0);
+        bp->pad (0).setProperty ("norm", true, nullptr); bp->rebuildForTest();
+        renderInfo ("b_norm.wav", pk1, on1);
+        std::printf ("       normalize: cho'qqi %.1f -> %.1f dBFS\n", pk0, pk1);
+        check (pk0 < -20 && std::abs (pk1 + 1.0f) < 1.5f, "AZ BEAT Normalize: past signal -1 dBFS ga ko'tarildi");
+        bp->pad (0).setProperty ("delay", -50.0, nullptr); bp->rebuildForTest();
+        renderInfo ("b_early.wav", pk2, on2);
+        double onLate; float pk3; bp->pad (0).setProperty ("delay", 100.0, nullptr); bp->rebuildForTest();
+        renderInfo ("b_late.wav", pk3, onLate);
+        std::printf ("       delay: 0 ms -> %.3f s, -50 ms -> %.3f s, +100 ms -> %.3f s\n", on1, on2, onLate);
+        check (std::abs (on1 - 0.5) < 0.003 && std::abs (on2 - 0.45) < 0.003 && std::abs (onLate - 0.6) < 0.003, "AZ BEAT Delay: oldinga (-50 ms) va orqaga (+100 ms) siljitish");
+
+        // moslik
+        const auto key = az::sync::keyFromString ("A minor");
+        auto mg = az::sync::matchToProject (a10->engine, s808g, 120, key), mf = az::sync::matchToProject (a10->engine, s808fs, 120, key);
+        auto ml = az::sync::matchToProject (a10->engine, sdir.getChildFile ("Pad_Loop_120bpm_Am.wav"), 120, key);
+        std::printf ("       moslik: %s | %s | %s\n", mg.text.toRawUTF8(), mf.text.toRawUTF8(), ml.text.toRawUTF8());
+        check (mg.score == 2 && mf.score == 0 && ml.score == 2, "Sample moslik: 808 G (A minor'da) mos, F# mos emas, 120bpm Am loop mos");
+        // papkada oldinga/orqaga
+        {
+            az::BeatEditor ed (*bp); bp->loadSample (1, s808g);
+            ed.selectPadForTest (1); ed.browse (+1, false);
+            const bool nxt = juce::File (bp->pad (1)["file"].toString()) == s808fs;
+            ed.browse (-1, false); ed.browse (-1, false);
+            const bool prv = juce::File (bp->pad (1)["file"].toString()) == quiet;
+            ed.browse (+1, true);    // keyingi MOS: quiet(?) -> 808 G
+            check (nxt && prv && juce::File (bp->pad (1)["file"].toString()) == s808g, "AZ BEAT: papkadagi sample'larni oldinga/orqaga (Shift: faqat moslari)");
+        }
+        // plagin oynasi paneli: Play ishlaydi
+        {
+            int got = -1; az::pluginWindowTransport = [&] (int c) { got = c; };
+            juce::Component dummy; dummy.setSize (300, 200); juce::DocumentWindow dw ("t", juce::Colours::black, 0, false);
+            az::PluginFrame fr (dummy, dw);
+            fr.playB.triggerClick(); juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+            check (got == 0 && fr.pinB.getToggleState() && fr.getHeight() == 200 + az::PluginFrame::barH, "Plagin oynasida Play/Stop paneli va 'Qotirish' (yoqilgan)");
+            az::pluginWindowTransport = nullptr;
+        }
+        // AUTO LVL
+        {
+            auto mc10 = std::make_unique<az::MainComponent> (*a10);
+            auto& mb = mc10->getMedia();
+            juce::AudioBuffer<float> b; double sr; az::dop::readFile (a10->engine, sdir.getChildFile ("Pad_Loop_120bpm_Am.wav"), b, sr);
+            mb.sampleRmsDb = az::MediaBrowser::activeRmsDb (b); mb.masterPeakDb = -200;
+            const float silentMix = mb.computeAutoDb();
+            mb.masterPeakDb = -6.0f;
+            const float loudMix = mb.computeAutoDb();
+            std::printf ("       AUTO LVL: sample %.1f dB RMS -> jim mix: %+.1f dB, -6 dB mix: %+.1f dB\n", mb.sampleRmsDb, silentMix, loudMix);
+            check (std::abs (mb.sampleRmsDb + 13.5f) < 0.6f && std::abs (silentMix + 6.5f) < 0.7f && std::abs (loudMix - (-18.0f + 13.5f)) < 0.7f,
+                   "AUTO LVL: sample balandligi mix balandligiga moslanadi");
+            auto* at = a10->addAudioTrack ("Loop");
+            auto c = a10->importAudio (*at, sdir.getChildFile ("Pad_Loop_120bpm_Am.wav"), te::TimePosition());
+            mb.masterPeakDb = -200;
+            mb.applySync (*c, sdir.getChildFile ("Pad_Loop_120bpm_Am.wav"));
+            check (std::abs (c->getGainDB() - silentMix) < 0.7f, "AUTO LVL: trekka qo'yilgan klip gain'i ham moslandi");
+            mc10.reset();
+        }
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

@@ -6,6 +6,18 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.8.0: AZ BEAT Normalize/Delay/papkani varaqlash · plagin oynasida Play va "Qotirish" · AUTO LVL
+| Funksiya | Qanday |
+|---|---|
+| **NORMALIZE** (AZ BEAT pad) | Past signalli sample'ni −1 dBFS cho'qqiga ko'taradi (start–end oralig'i bo'yicha) |
+| **DELAY** (AZ BEAT pad) | −250 … +250 ms: sample'ni kechiktirish yoki ertaroq chalish (sekvenser, MIDI kirish va Pattern → MIDI'da) |
+| **◀ ▶ / ← →** (pad to'lqini ustida) | Shu papkadagi oldingi/keyingi sample'ni yuklab, darhol chaladi. **Shift** bilan — faqat loyihaga **mos** keladiganlari |
+| Moslik belgisi | Loyiha BPM va tonalligiga nisbatan: loop — BPM ✓/≈/✗ va tonallik; one-shot (kick, 808, bass) — asosiy nota va u tonallikda bormi |
+| **Plagin oynasi paneli** | Har plagin oynasi tepasida ▶ ■ \|◀ — oyna ochiq bo'lsa ham Play ishlaydi; Probel va boshqa klavishlar DAW'ga uzatiladi |
+| **✓ Qotirish** | Yoqilganda (yashil) oyna DAW ustida qoladi — DAW'ni bossangiz ham yo'qolmaydi; o'chirsa oddiy oyna |
+| **Tinglash balandligi** | Media brauzerda "dB tinglash" slayderi (2x bosish = 0 dB) |
+| **AUTO LVL** | Tanlangan sample/loop balandligi DAW mix'ining real-time balandligiga moslanadi (mix jim bo'lsa −20 dBFS RMS); trekka qo'yilganda klip gain'i ham shunga o'rnatiladi. Yoqib-o'chiriladi |
+
 ## 0.7.0: Alt-bypass · Tap ovozni buzmaydi · ikki chetdan qirqish · spektrogramma · zarba magniti · trek tartibi
 | Funksiya | Qanday |
 |---|---|

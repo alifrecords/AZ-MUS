@@ -232,4 +232,79 @@ inline juce::AudioBuffer<float> stretch (const juce::AudioBuffer<float>& in, dou
     for (int c = 0; c < ch; ++c) res.copyFrom (c, 0, out, c, lat, len);
     return res;
 }
+// ---------------------------------------------------------------- one-shot (kick, 808, bass) asosiy tonini topish
+inline double detectPitchHz (const juce::AudioBuffer<float>& b, double sr)
+{
+    constexpr int order = 15, N = 1 << order;
+    juce::dsp::FFT fft (order);
+    std::vector<float> w ((size_t) N * 2, 0.0f);
+    const int len = juce::jmin (b.getNumSamples(), (int) (sr * 0.6), N);
+    if (len < 512) return 0;
+    for (int i = 0; i < len; ++i)
+    {
+        float v = 0; for (int c = 0; c < b.getNumChannels(); ++c) v += b.getSample (c, i);
+        w[(size_t) i] = v * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) len));
+    }
+    fft.performFrequencyOnlyForwardTransform (w.data());
+    int best = 0; float bv = 0;
+    const int k0 = (int) (28.0 / sr * N), k1 = (int) (1200.0 / sr * N);
+    for (int k = juce::jmax (1, k0); k < k1; ++k) if (w[(size_t) k] > bv) { bv = w[(size_t) k]; best = k; }
+    if (best == 0) return 0;
+    // parabolik aniqlash
+    const double a = w[(size_t) best - 1], c0 = w[(size_t) best], d = w[(size_t) best + 1];
+    const double den = a - 2 * c0 + d;
+    const double off = std::abs (den) < 1e-12 ? 0.0 : juce::jlimit (-0.5, 0.5, 0.5 * (a - d) / den);
+    return (best + off) * sr / N;
+}
+inline int hzToMidi (double hz) { return hz > 0 ? (int) std::lround (69 + 12 * std::log2 (hz / 440.0)) : -1; }
+inline bool noteInKey (int pc, KeyInfo k)
+{
+    if (! k.valid()) return true;
+    static const int maj[] = { 0, 2, 4, 5, 7, 9, 11 }, mnr[] = { 0, 2, 3, 5, 7, 8, 10 };
+    const int rel = ((pc - k.root) % 12 + 12) % 12;
+    for (int i : (k.minor ? mnr : maj)) if (i == rel) return true;
+    return false;
+}
+
+// loyihaga moslik: 2 = mos, 1 = yaqin, 0 = mos emas
+struct Match { int score = 2; juce::String text; };
+inline Match matchToProject (te::Engine& e, const juce::File& f, double projBpm, KeyInfo projKey)
+{
+    juce::AudioBuffer<float> b; auto fi = analyse (e, f, projBpm, &b);
+    Match m; juce::StringArray parts;
+    const auto check = juce::String::fromUTF8 (" \xe2\x9c\x93"), cross = juce::String::fromUTF8 (" \xe2\x9c\x97"), approx = juce::String::fromUTF8 (" \xe2\x89\x88");
+    if (fi.loop && fi.bpm > 0)
+    {
+        const double r = fi.bpm / projBpm;
+        const bool ok = std::abs (r - 1) < 0.02 || std::abs (r - 2) < 0.04 || std::abs (r - 0.5) < 0.01;
+        const bool near = std::abs (r - 1) < 0.12;
+        parts.add (juce::String (fi.bpm, 1) + (fi.bpmGuessed ? "?" : "") + " BPM" + (ok ? check : near ? approx : cross));
+        m.score = juce::jmin (m.score, ok ? 2 : near ? 1 : 0);
+    }
+    const bool oneShot = ! fi.loop && fi.lengthSec < 3.0;
+    if (! oneShot && ! fi.drum && fi.key.valid())
+    {
+        const int d = ((fi.key.root - projKey.root) % 12 + 12) % 12;
+        const bool same = fi.key.minor == projKey.minor && d == 0;
+        const bool rel = (fi.key.minor && ! projKey.minor && d == 9) || (! fi.key.minor && projKey.minor && d == 3);
+        const bool fifth = d == 5 || d == 7;
+        parts.add (keyName (fi.key) + (fi.key.guessed ? "?" : "") + (same || rel ? check : fifth ? approx : cross));
+        m.score = juce::jmin (m.score, same || rel ? 2 : fifth ? 1 : 0);
+    }
+    else if (oneShot && b.getNumSamples() > 0)
+    {
+        const double hz = detectPitchHz (b, fi.sampleRate);
+        const int midi = hzToMidi (hz);
+        const bool tonal = ! fi.drum || f.getFileName().containsIgnoreCase ("808") || f.getFileName().containsIgnoreCase ("kick") || f.getFileName().containsIgnoreCase ("bass");
+        if (midi > 0 && midi < 128 && tonal)
+        {
+            const bool in = noteInKey (midi % 12, projKey);
+            parts.add (juce::MidiMessage::getMidiNoteName (midi, true, true, 3) + " (" + juce::String ((int) hz) + " Hz)" + (in ? check : cross));
+            m.score = juce::jmin (m.score, in ? 2 : 0);
+        }
+    }
+    if (parts.isEmpty()) parts.add (fi.drum ? juce::String::fromUTF8 ("perkussiya") : juce::String::fromUTF8 ("tahlil yo'q"));
+    m.text = parts.joinIntoString (juce::String::fromUTF8 ("  \xc2\xb7  "));
+    return m;
+}
 }

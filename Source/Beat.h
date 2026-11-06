@@ -21,7 +21,7 @@ inline double rateBeats (int r) { return r == 1 ? 0.5 : r == 2 ? 0.125 : r == 3 
 struct PadRT
 {
     std::shared_ptr<const juce::AudioBuffer<float>> sample; double sampleRate = 48000;
-    float gain = 1, pan = 0, tune = 0, start = 0, end = 1, attackMs = 0, decayMs = 30;
+    float gain = 1, pan = 0, tune = 0, start = 0, end = 1, attackMs = 0, decayMs = 30, delayMs = 0;
     bool reverse = false, mute = false, solo = false; int choke = 0;
     juce::uint8 steps[maxSteps] {}, ratchet[maxSteps] {};
 };
@@ -127,7 +127,7 @@ public:
         if (! state.hasProperty ("seqOn")) { state.setProperty ("seqOn", true, nullptr); state.setProperty ("length", 16, nullptr); state.setProperty ("rate", 0, nullptr);
                                              state.setProperty ("swing", 0.0, nullptr); state.setProperty ("master", 0.0, nullptr); }
         rebuildAll();
-        startTimerHz (4);
+        startTimerHz (12);
     }
     ~AzBeatPlugin() override { stopTimer(); notifyListenersOfDeletion(); }
 
@@ -153,9 +153,9 @@ public:
         for (auto c : state) if (c.hasType (beat::PAD) && (int) c["idx"] == i) return c;
         juce::ValueTree p (beat::PAD);
         p.setProperty ("idx", i, nullptr); p.setProperty ("file", "", nullptr); p.setProperty ("name", "", nullptr);
-        for (auto [k, v] : std::initializer_list<std::pair<const char*, double>> { { "gain", 0 }, { "pan", 0 }, { "tune", 0 }, { "fine", 0 }, { "start", 0 }, { "end", 1 }, { "attack", 0 }, { "decay", 30 } })
+        for (auto [k, v] : std::initializer_list<std::pair<const char*, double>> { { "gain", 0 }, { "pan", 0 }, { "tune", 0 }, { "fine", 0 }, { "start", 0 }, { "end", 1 }, { "attack", 0 }, { "decay", 30 }, { "delay", 0 } })
             p.setProperty (k, v, nullptr);
-        for (auto k : { "reverse", "mute", "solo", "sync" }) p.setProperty (k, false, nullptr);
+        for (auto k : { "reverse", "mute", "solo", "sync", "norm" }) p.setProperty (k, false, nullptr);
         p.setProperty ("choke", 0, nullptr);
         p.setProperty ("steps", juce::String::repeatedString ("0,", beat::maxSteps), nullptr);
         p.setProperty ("ratchet", juce::String::repeatedString ("1,", beat::maxSteps), nullptr);
@@ -186,6 +186,7 @@ public:
         v.setProperty ("file", f.getFullPathName(), um()); v.setProperty ("name", f.getFileNameWithoutExtension(), um());
         v.setProperty ("start", startN, um()); v.setProperty ("end", endN, um());
         cache.erase (f.getFullPathName());
+        rebuildAll();
         return true;
     }
     void clearPad (int p) { auto v = pad (p); v.setProperty ("file", "", um()); v.setProperty ("name", "", um()); }
@@ -203,6 +204,7 @@ public:
             setStep (4, 14, 90); setStep (3, 15, 60); setRatchet (3, 15, 3);
         }
         state.setProperty ("kit", "AZ Default", nullptr);
+        rebuildAll();
     }
 
     // ---- Slice: loopni transientlar bo'yicha padlarga bo'lib, patternni yozadi
@@ -226,6 +228,7 @@ public:
         }
         state.setProperty ("length", steps, nullptr); state.setProperty ("rate", 0, nullptr);
         state.setProperty ("kit", f.getFileNameWithoutExtension() + " (slice)", nullptr);
+        rebuildAll();
         return juce::String (on.size()) + juce::String::fromUTF8 (" bo'lak \xc2\xb7 ") + juce::String (bpm, 1) + " BPM" + (fi.bpm > 0 ? "" : juce::String::fromUTF8 (" (loyiha tempi)"));
     }
 
@@ -264,7 +267,8 @@ public:
                 {
                     const int p = m.getNoteNumber() - beat::firstNote;
                     if (p >= 0 && p < beat::numPads)
-                        trigger (*sn, p, m.getVelocity(), juce::jlimit (0, n - 1, juce::roundToInt ((m.getTimeStamp() + fc.midiBufferOffset) * outRate)));
+                        trigger (*sn, p, m.getVelocity(), juce::jlimit (0, n - 1, juce::roundToInt ((m.getTimeStamp() + fc.midiBufferOffset) * outRate))
+                                                          + juce::jmax (0, (int) (sn->pads[p].delayMs * 0.001 * outRate)));
                 }
         }
         // ichki sekvenser (Nerve)
@@ -274,12 +278,14 @@ public:
             const double b0 = fc.editTime.getStart().inSeconds() * bpm / 60.0, b1 = fc.editTime.getEnd().inSeconds() * bpm / 60.0;
             const double rb = beat::rateBeats (sn->rate);
             const int L = sn->length;
+            const double maxShift = 0.25 * bpm / 60.0;          // delay: +-250 ms
             if (b1 > b0)
             {
-                for (long k = (long) std::floor (b0 / rb) - 1; ; ++k)
+                for (long k = (long) std::floor ((b0 - maxShift) / rb) - 1; ; ++k)
                 {
                     const double base = k * rb;
-                    if (base >= b1) break;
+                    if (base >= b1 + maxShift) break;
+                    if (base < 0) continue;
                     const int idx = (int) (((k % L) + L) % L);
                     const double swing = (idx % 2 == 1) ? sn->swing * rb * 0.5 : 0.0;
                     for (int p = 0; p < beat::numPads; ++p)
@@ -289,12 +295,12 @@ public:
                         const int rat = juce::jmax (1, (int) sn->pads[p].ratchet[idx]);
                         for (int r = 0; r < rat; ++r)
                         {
-                            const double at = base + swing + r * rb / rat;
+                            const double at = base + swing + r * rb / rat + sn->pads[p].delayMs * 0.001 * bpm / 60.0;
                             if (at < b0 || at >= b1) continue;
                             trigger (*sn, p, juce::jmax (1, vel - r * 12), juce::jlimit (0, n - 1, (int) ((at - b0) * 60.0 / bpm * outRate)));
                         }
                     }
-                    if (base >= b0 - rb && base < b1) playStep = idx;
+                    if (base >= b0 && base < b1) playStep = idx;
                 }
             }
         }
@@ -320,6 +326,7 @@ public:
         restorePluginStateFromValueTree (v); state.setProperty ("kit", f.getFileNameWithoutExtension(), nullptr);
         return true;
     }
+    void rebuildForTest() { rebuildAll(); }
     double sampleSeconds (int p)
     {
         auto it = cache.find (pad (p)["file"].toString());
@@ -389,6 +396,14 @@ private:
                 }
             }
             p.gain = juce::Decibels::decibelsToGain ((float) (double) v["gain"]); p.pan = (float) (double) v["pan"];
+            p.delayMs = (float) juce::jlimit (-250.0, 250.0, (double) v["delay"]);
+            if ((bool) v["norm"] && p.sample && p.sample->getNumSamples() > 0)
+            {   // Normalize: tanlangan bo'lak cho'qqisi -1 dBFS
+                const int N = p.sample->getNumSamples();
+                const int a = juce::jlimit (0, N - 1, (int) ((double) v["start"] * N)), b = juce::jlimit (a + 1, N, (int) ((double) v["end"] * N));
+                float pk = 0; for (int c = 0; c < p.sample->getNumChannels(); ++c) pk = juce::jmax (pk, p.sample->getMagnitude (c, a, b - a));
+                if (pk > 1e-5f) p.gain *= juce::jmin (63.0f, 0.891f / pk);
+            }
             p.tune = (float) ((double) v["tune"] + (double) v["fine"] / 100.0);
             p.start = (float) (double) v["start"]; p.end = (float) (double) v["end"];
             p.attackMs = (float) (double) v["attack"]; p.decayMs = (float) (double) v["decay"];
@@ -474,16 +489,25 @@ class BeatEditor : public te::Plugin::EditorComponent, private juce::Timer, publ
 public:
     explicit BeatEditor (AzBeatPlugin& p) : plugin (p)
     {
-        for (auto* b : { &loadKitB, &saveKitB, &defaultB, &sliceB, &toMidiB, &seqB, &clearB, &humanB, &loadSmpB, &revB, &syncB, &muteB, &soloB })
+        for (auto* b : { &loadKitB, &saveKitB, &defaultB, &sliceB, &toMidiB, &seqB, &clearB, &humanB, &loadSmpB, &revB, &syncB, &muteB, &soloB, &normB, &prevB, &nextB })
         { addAndMakeVisible (b); b->getProperties().set ("radius", 5.0f); }
         loadKitB.setButtonText ("Kit..."); saveKitB.setButtonText (U ("Saqlash")); defaultB.setButtonText (U ("AZ kit"));
         sliceB.setButtonText (U ("Slice loop...")); toMidiB.setButtonText (U ("Pattern \xe2\x86\x92 MIDI")); seqB.setButtonText ("SEQ");
         clearB.setButtonText (U ("Tozalash")); humanB.setButtonText ("Humanize"); loadSmpB.setButtonText (U ("Sample..."));
         revB.setButtonText ("REVERSE"); syncB.setButtonText ("SYNC"); muteB.setButtonText ("M"); soloB.setButtonText ("S");
+        normB.setButtonText ("NORMALIZE"); normB.setTooltip (U ("Past signalli sample'ni -1 dBFS cho'qqiga ko'tarish"));
+        prevB.setButtonText (juce::String::fromUTF8 ("\xe2\x97\x80")); nextB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb6"));
+        prevB.setTooltip (U ("Papkadagi oldingi sample (\xe2\x86\x90). Shift: oldingi MOS sample"));
+        nextB.setTooltip (U ("Papkadagi keyingi sample (\xe2\x86\x92). Shift: keyingi MOS sample (tonallik/BPM)"));
+        prevB.onClick = [this] { browse (-1, juce::ModifierKeys::currentModifiers.isShiftDown()); };
+        nextB.onClick = [this] { browse (+1, juce::ModifierKeys::currentModifiers.isShiftDown()); };
+        normB.onClick = [this] { plugin.pad (sel).setProperty ("norm", normB.getToggleState(), plugin.um()); plugin.previewPad (sel); };
+        setWantsKeyboardFocus (true);
         sliceB.setTooltip (U ("Loopni transientlar bo'yicha 16 padga bo'lish va patternni avtomatik yozish (Nerve)"));
         toMidiB.setTooltip (U ("Patternni trekka MIDI klip qilib qo'yish (keyin tahrirlash uchun)"));
         syncB.setTooltip (U ("Loopni loyiha tempiga moslash"));
-        for (auto* b : { &seqB, &revB, &syncB, &muteB, &soloB }) b->setClickingTogglesState (true);
+        for (auto* b : { &seqB, &revB, &syncB, &muteB, &soloB, &normB }) b->setClickingTogglesState (true);
+        normB.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (0.4f));
         seqB.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (0.4f));
         addAndMakeVisible (lenBox); for (int l : { 16, 32, 48, 64 }) lenBox.addItem (juce::String (l) + " step", l);
         addAndMakeVisible (rateBox); for (int i = 0; i < 4; ++i) rateBox.addItem (beat::rateNames[i], i + 1);
@@ -496,12 +520,14 @@ public:
             if (mid != 0) s.setSkewFactorFromMidPoint (mid);
         };
         knob (gainK, -36, 12, 0.1, " dB"); knob (panK, -1, 1, 0.01, ""); knob (tuneK, -24, 24, 1, " st"); knob (fineK, -100, 100, 1, " ct");
-        knob (atkK, 0, 200, 0.5, " ms", 20); knob (decK, 0, 2000, 1, " ms", 200); knob (swingK, 0, 75, 1, "%"); knob (masterK, -24, 6, 0.1, " dB");
+        knob (atkK, 0, 200, 0.5, " ms", 20); knob (decK, 0, 2000, 1, " ms", 200); knob (dlyK, -250, 250, 0.1, " ms");
+        dlyK.getProperties().set ("bipolar", true); dlyK.setDoubleClickReturnValue (true, 0);
+        dlyK.setTooltip (U ("Delay: sample'ni kechiktirish (+) yoki ertaroq chalish (\xe2\x88\x92), millisekundda")); knob (swingK, 0, 75, 1, "%"); knob (masterK, -24, 6, 0.1, " dB");
         panK.getProperties().set ("bipolar", true); tuneK.getProperties().set ("bipolar", true); fineK.getProperties().set ("bipolar", true);
         gainK.setDoubleClickReturnValue (true, 0); panK.setDoubleClickReturnValue (true, 0); tuneK.setDoubleClickReturnValue (true, 0); fineK.setDoubleClickReturnValue (true, 0);
 
         auto bindPad = [this] (juce::Slider& s, const char* id) { s.onValueChange = [this, &s, id] { plugin.pad (sel).setProperty (id, s.getValue(), plugin.um()); repaint(); }; };
-        bindPad (gainK, "gain"); bindPad (panK, "pan"); bindPad (tuneK, "tune"); bindPad (fineK, "fine"); bindPad (atkK, "attack"); bindPad (decK, "decay");
+        bindPad (gainK, "gain"); bindPad (panK, "pan"); bindPad (tuneK, "tune"); bindPad (fineK, "fine"); bindPad (atkK, "attack"); bindPad (decK, "decay"); bindPad (dlyK, "delay");
         swingK.onValueChange = [this] { plugin.state.setProperty ("swing", swingK.getValue() / 100.0, plugin.um()); };
         masterK.onValueChange = [this] { plugin.state.setProperty ("master", masterK.getValue(), plugin.um()); };
         revB.onClick  = [this] { plugin.pad (sel).setProperty ("reverse", revB.getToggleState(), plugin.um()); repaint(); };
@@ -545,8 +571,10 @@ public:
     void refresh()
     {
         auto v = plugin.pad (sel);
-        for (auto [s, id] : std::initializer_list<std::pair<juce::Slider*, const char*>> { { &gainK, "gain" }, { &panK, "pan" }, { &tuneK, "tune" }, { &fineK, "fine" }, { &atkK, "attack" }, { &decK, "decay" } })
+        for (auto [s, id] : std::initializer_list<std::pair<juce::Slider*, const char*>> { { &gainK, "gain" }, { &panK, "pan" }, { &tuneK, "tune" }, { &fineK, "fine" }, { &atkK, "attack" }, { &decK, "decay" }, { &dlyK, "delay" } })
             s->setValue ((double) v[id], juce::dontSendNotification);
+        normB.setToggleState (v["norm"], juce::dontSendNotification);
+        updateMatch();
         revB.setToggleState (v["reverse"], juce::dontSendNotification); syncB.setToggleState (v["sync"], juce::dontSendNotification);
         muteB.setToggleState (v["mute"], juce::dontSendNotification); soloB.setToggleState (v["solo"], juce::dontSendNotification);
         chokeBox.setSelectedId ((int) v["choke"] + 1, juce::dontSendNotification);
@@ -586,10 +614,12 @@ public:
         // pad paneli (pastki)
         const int y = 470;
         int x = 596;
-        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK }) { k->setBounds (x, y + 6, 64, 78); x += 66; }
+        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK }) { k->setBounds (x, y + 6, 58, 78); x += 60; }
         x = 596;
         loadSmpB.setBounds (x, y + 98, 90, 26); revB.setBounds (x + 96, y + 98, 80, 26); syncB.setBounds (x + 182, y + 98, 62, 26);
         chokeBox.setBounds (x + 250, y + 98, 96, 26); muteB.setBounds (x + 352, y + 98, 30, 26); soloB.setBounds (x + 386, y + 98, 30, 26);
+        normB.setBounds (x, y + 130, 120, 24);
+        prevB.setBounds (16, y - 22, 26, 18); nextB.setBounds (46, y - 22, 26, 18);
         swingK.setBounds (getWidth() - 152, y + 6, 64, 78); masterK.setBounds (getWidth() - 80, y + 6, 64, 78);
     }
 
@@ -653,7 +683,14 @@ public:
                { ga.getX(), ga.getBottom() + 6, ga.getWidth(), 14 }, 9, dim2, Justification::centredLeft, 400);
         // tanlangan pad: to'lqin + start/end
         auto wa = waveArea();
-        caps (g, "PAD " + String (sel + 1) + String::fromUTF8 ("  \xc2\xb7  ") + plugin.pad (sel)["name"].toString(), { wa.getX(), wa.getY() - 18, 500, 12 }, 8.5f, beatColour (sel));
+        caps (g, "PAD " + String (sel + 1) + String::fromUTF8 ("  \xc2\xb7  ") + plugin.pad (sel)["name"].toString(), { wa.getX() + 64, wa.getY() - 18, 300, 12 }, 8.5f, beatColour (sel));
+        if (matchText.isNotEmpty())
+        {
+            const Colour mc = matchScore == 2 ? green : matchScore == 1 ? yellow : red;
+            auto br = Rectangle<float> (wa.getRight() - 300, wa.getY() - 21, 300, 16);
+            g.setColour (mc.withAlpha (0.14f)); g.fillRoundedRectangle (br, 4);
+            label (g, matchText, br.reduced (6, 0), 9, mc, Justification::centredRight, 600);
+        }
         g.setColour (Colour (0xff09080b)); g.fillRoundedRectangle (wa, 8);
         double sr = 48000; auto buf = plugin.sampleOf (sel, sr);
         if (buf && buf->getNumSamples() > 1)
@@ -675,8 +712,8 @@ public:
             label (g, String (sr > 0 ? N / sr : 0.0, 2) + " s", wa.reduced (8, 4), 9, dim, Justification::bottomRight, 500);
         }
         else label (g, U ("Sample yo'q \xe2\x80\x94 media brauzerdan sudrab tashlang yoki \"Sample...\""), wa, 10.5f, dim, Justification::centred, 500);
-        const char* kn[] = { "GAIN", "PAN", "TUNE", "FINE", "ATTACK", "DECAY" };
-        int x = 596; for (auto* n : kn) { caps (g, n, { (float) x, 458, 64, 10 }, 8, dim, Justification::centred); x += 66; }
+        const char* kn[] = { "GAIN", "PAN", "TUNE", "FINE", "ATTACK", "DECAY", "DELAY" };
+        int x = 596; for (auto* n : kn) { caps (g, n, { (float) x, 458, 58, 10 }, 8, n[1] == 'E' && n[2] == 'L' ? Colour (0xff4ad6ff) : dim, Justification::centred); x += 60; }
         caps (g, "SWING", { (float) getWidth() - 152, 458, 64, 10 }, 8, dim, Justification::centred);
         caps (g, "MASTER", { (float) getWidth() - 80, 458, 64, 10 }, 8, dim, Justification::centred);
         g.setColour (Colours::white.withAlpha (0.06f)); g.drawVerticalLine (getWidth() - 160, 456, 560);
@@ -830,6 +867,53 @@ public:
         sel = juce::jlimit (0, beat::numPads - 1, p - 1); refresh();
         info = U ("Sample yuklandi: ") + juce::File (files[0]).getFileName();
     }
+    // ---- papkadagi sample'larni ketma-ket ko'rish (+ moslik bo'yicha)
+    static juce::Array<juce::File> folderSamples (const juce::File& f)
+    {
+        auto fs = f.getParentDirectory().findChildFiles (juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+        struct Cmp { int compareElements (const juce::File& a, const juce::File& b) const { return a.getFileName().compareNatural (b.getFileName()); } } cmp;
+        fs.sort (cmp);
+        return fs;
+    }
+    void selectPadForTest (int p) { sel = p; refresh(); }
+    void browse (int dir, bool onlyMatching)
+    {
+        juce::File cur (plugin.pad (sel)["file"].toString());
+        if (! cur.existsAsFile()) { loadSmpB.triggerClick(); return; }
+        auto fs = folderSamples (cur);
+        int i = fs.indexOf (cur);
+        if (fs.isEmpty()) return;
+        for (int tries = 0; tries < fs.size(); ++tries)
+        {
+            i = (i + dir + fs.size()) % fs.size();
+            if (! onlyMatching || matchFor (fs[i]).score == 2) break;
+        }
+        plugin.loadSample (sel, fs[i]);
+        refresh(); plugin.previewPad (sel);
+        info = juce::String (i + 1) + " / " + juce::String (fs.size()) + juce::String::fromUTF8 ("  \xc2\xb7  ") + fs[i].getFileName();
+    }
+    sync::Match matchFor (const juce::File& f)
+    {
+        const auto key = f.getFullPathName() + "|" + juce::String (projBpm(), 2) + "|" + projKeyString();
+        if (auto it = matchCache.find (key); it != matchCache.end()) return it->second;
+        auto m = sync::matchToProject (plugin.edit.engine, f, projBpm(), sync::keyFromString (projKeyString()));
+        matchCache[key] = m; return m;
+    }
+    double projBpm() const { return plugin.edit.tempoSequence.getTempo (0)->getBpm(); }
+    juce::String projKeyString() const { return plugin.edit.state.getProperty ("azKey", "A minor").toString(); }
+    void updateMatch()
+    {
+        juce::File f (plugin.pad (sel)["file"].toString());
+        if (! f.existsAsFile()) { matchText = {}; return; }
+        auto m = matchFor (f);
+        matchText = juce::String::fromUTF8 ("Loyiha (") + juce::String (projBpm(), 0) + " BPM, " + projKeyString() + "):  " + m.text; matchScore = m.score;
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k.getKeyCode() == juce::KeyPress::leftKey)  { browse (-1, k.getModifiers().isShiftDown()); return true; }
+        if (k.getKeyCode() == juce::KeyPress::rightKey) { browse (+1, k.getModifiers().isShiftDown()); return true; }
+        return false;
+    }
     void doSlice (const juce::File& f) { info = U ("Slice: ") + plugin.sliceLoop (f, plugin.edit.tempoSequence.getTempo (0)->getBpm()); sel = 0; refresh(); }
 
     void patternToMidi()
@@ -852,7 +936,8 @@ public:
                 {
                     const int rat = plugin.stepRatchet (p, s);
                     for (int r = 0; r < rat; ++r)
-                        mc->getSequence().addNote (beat::firstNote + p, te::BeatPosition::fromBeats (s * rb + (s % 2 ? swing * rb * 0.5 : 0) + r * rb / rat),
+                        mc->getSequence().addNote (beat::firstNote + p, te::BeatPosition::fromBeats (juce::jmax (0.0, s * rb + (s % 2 ? swing * rb * 0.5 : 0) + r * rb / rat
+                                                                                           + (double) plugin.pad (p)["delay"] * 0.001 * ts.getTempo (0)->getBpm() / 60.0)),
                                                    te::BeatDuration::fromBeats (rb / rat * 0.9), juce::jmax (1, v - r * 12), 0, &plugin.edit.getUndoManager());
                 }
         plugin.state.setProperty ("seqOn", false, plugin.um()); refresh();
@@ -872,7 +957,9 @@ private:
     juce::uint32 lastHitPaint = 0; int ticks = 0;
     juce::TextButton loadKitB, saveKitB, defaultB, sliceB, toMidiB, seqB, clearB, humanB, loadSmpB, revB, syncB, muteB, soloB;
     juce::ComboBox lenBox, rateBox, chokeBox;
-    juce::Slider gainK, panK, tuneK, fineK, atkK, decK, swingK, masterK;
+    juce::Slider gainK, panK, tuneK, fineK, atkK, decK, dlyK, swingK, masterK;
+    juce::TextButton normB, prevB, nextB;
+    std::map<juce::String, sync::Match> matchCache; juce::String matchText; int matchScore = 2;
     juce::ValueTree copied; juce::String info;
     std::unique_ptr<juce::FileChooser> chooser;
 };

@@ -110,6 +110,11 @@ public:
         lanes.onBounce = [this] { bounce(); };
         lanes.onQuantize = [this] { quantizeSelected(); };
         mixer.onDetach = [this] { toggleMixerWindow(); };
+        // plagin oynalari ochiq bo'lsa ham transport ishlasin
+        pluginWindowTransport = [this] (int c) { if (c == 0) togglePlay(); if (c == 1) stop(); if (c == 2 && app.edit) { app.edit->getTransport().setPosition (te::TimePosition()); refreshAll(); } };
+        pluginWindowKeys = [this] (const juce::KeyPress& k) { return keyPressed (k); };
+        pluginWindowIsPlaying = [this] { return app.edit && app.edit->getTransport().isPlaying(); };
+        pluginWindowPinDefault = app.engine.getPropertyStorage().getPropertiesFile().getBoolValue ("azPluginPin", true);
         mixer.onRoutingChanged = [this] { inspector.refresh(); headers.repaint(); lanes.repaint(); };
         headers.onAddTrack = [this] { showAddTrackMenu(); };
         headers.onTracksReordered = [this] { mixer.rebuild(); refreshAll(); };
@@ -135,6 +140,8 @@ public:
     }
     ~MainComponent() override
     {
+        app.engine.getPropertyStorage().getPropertiesFile().setValue ("azPluginPin", pluginWindowPinDefault);
+        pluginWindowTransport = nullptr; pluginWindowKeys = nullptr; pluginWindowIsPlaying = nullptr;
         app.onEditChanged = nullptr; app.removeChangeListener (this); vs.removeChangeListener (this);
         pianoRoll.reset(); connections.reset(); dopWindow.reset(); renderWindow.reset();
         if (mixerWindow) { mixerWindow->clearContentComponent(); mixerWindow.reset(); }
@@ -712,6 +719,7 @@ public:
     Lanes& getLanes() { return lanes; }
     ViewState& getViewState() { return vs; }
     Mixer& getMixer() { return mixer; }
+    MediaBrowser& getMedia() { return media; }
     void setUiZoomLabel (float s) { top.uiScale = s; top.repaint(); }
 
     void showPluginManager()

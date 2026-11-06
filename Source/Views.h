@@ -1374,7 +1374,7 @@ public:
 };
 
 // =============================================================================  Media brauzer
-class MediaBrowser : public juce::Component, private juce::FileBrowserListener, private juce::ChangeListener
+class MediaBrowser : public juce::Component, private juce::FileBrowserListener, private juce::ChangeListener, private juce::Timer
 {
 public:
     std::function<void (const juce::File&)> onInsertFile;
@@ -1386,9 +1386,17 @@ public:
     // trekka qo'yilgan audio klipni loyiha BPM/tonalligiga moslash (yoqilgan bo'lsa)
     juce::String applySync (te::WaveAudioClip& c, const juce::File& f)
     {
-        if (! syncBpm() && ! syncKey()) return {};
-        auto fi = sync::analyse (app.engine, f, projBpm());
         juce::String msg;
+        if (autoLevel())
+        {
+            juce::AudioBuffer<float> b; sync::analyse (app.engine, f, projBpm(), &b);
+            sampleRmsDb = activeRmsDb (b);
+            const float g = computeAutoDb();
+            c.setGainDB (g);
+            msg << "gain " << (g > 0 ? "+" : "") << juce::String (g, 1) << " dB";
+        }
+        if (! syncBpm() && ! syncKey()) return msg;
+        auto fi = sync::analyse (app.engine, f, projBpm());
         const auto arrow = juce::String::fromUTF8 (" \xe2\x86\x92 "), dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
         if (syncBpm() && fi.loop && fi.bpm > 0)
         {
@@ -1397,7 +1405,7 @@ public:
             c.setAutoTempo (true);
             const double beats = fi.lengthSec * fi.bpm / 60.0;
             c.setLength (te::TimeDuration::fromSeconds (beats * 60.0 / projBpm()), true);
-            msg << juce::String (fi.bpm, 1) << arrow << juce::String (projBpm(), 1) << " BPM";
+            msg << (msg.isEmpty() ? juce::String() : dot) << juce::String (fi.bpm, 1) << arrow << juce::String (projBpm(), 1) << " BPM";
         }
         if (syncKey() && ! fi.drum && fi.key.valid())
         {
@@ -1440,12 +1448,68 @@ public:
         keyB.setToggleState (pf.getBoolValue ("azSyncKey", true), juce::dontSendNotification);
         bpmB.onClick = [this] { app.engine.getPropertyStorage().getPropertiesFile().setValue ("azSyncBpm", bpmB.getToggleState()); if (previewFile.existsAsFile()) startPreview (previewFile); };
         keyB.onClick = [this] { app.engine.getPropertyStorage().getPropertiesFile().setValue ("azSyncKey", keyB.getToggleState()); if (previewFile.existsAsFile()) startPreview (previewFile); };
+        // tinglash balandligi: qo'lda (dB) + AUTO LVL (DAW mix balandligiga moslash)
+        addAndMakeVisible (volS); addAndMakeVisible (autoB);
+        volS.setSliderStyle (juce::Slider::LinearBar); volS.setRange (-30.0, 12.0, 0.5); volS.setDoubleClickReturnValue (true, 0.0);
+        volS.setTextValueSuffix (U (" dB tinglash")); volS.setValue (pf.getDoubleValue ("azPrevVol", 0.0), juce::dontSendNotification);
+        volS.setColour (juce::Slider::trackColourId, red.withAlpha (0.3f));
+        volS.setTooltip (U ("Kutubxonadan tinglash balandligi (2x bosish = 0 dB)"));
+        volS.onValueChange = [this] { app.engine.getPropertyStorage().getPropertiesFile().setValue ("azPrevVol", volS.getValue()); applyGain(); };
+        autoB.setButtonText ("AUTO LVL"); autoB.setClickingTogglesState (true); autoB.getProperties().set ("radius", 5.0f);
+        autoB.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (0.35f));
+        autoB.setToggleState (pf.getBoolValue ("azPrevAuto", true), juce::dontSendNotification);
+        autoB.setTooltip (U ("Sample/loop balandligini DAW'dagi mix balandligiga real-time moslash (trekka qo'yganda klip gain ham shunga o'rnatiladi)"));
+        autoB.onClick = [this] { app.engine.getPropertyStorage().getPropertiesFile().setValue ("azPrevAuto", autoB.getToggleState()); applyGain(); };
         app.engine.getDeviceManager().deviceManager.addAudioCallback (&player);
         player.setSource (&transport);
         transport.addChangeListener (this);
+        startTimerHz (15);
+    }
+    // ---- AUTO LVL
+    bool autoLevel() const { return autoB.getToggleState(); }
+    float autoGainDb = 0;            // hozirgi avtomatik tuzatish
+    float sampleRmsDb = -200;        // tanlangan sample'ning (faol qismi) RMS
+    float masterPeakDb = -200;       // DAW master (silliqlangan)
+    // maqsad: mix ishlayotgan bo'lsa — mix RMS'idan 3 dB past, jim bo'lsa — -20 dBFS RMS
+    float targetRmsDb() const { return masterPeakDb > -60.0f ? (masterPeakDb - 9.0f) - 3.0f : -20.0f; }
+    float computeAutoDb() const { return sampleRmsDb < -100 ? 0.0f : juce::jlimit (-18.0f, 18.0f, targetRmsDb() - sampleRmsDb); }
+    void applyGain()
+    {
+        const float db = (float) volS.getValue() + (autoLevel() ? autoGainDb : 0.0f);
+        transport.setGain (juce::Decibels::decibelsToGain (db));
+        repaint();
+    }
+    static float activeRmsDb (const juce::AudioBuffer<float>& b)
+    {
+        // jim joylarsiz RMS (50 ms bloklar, eng past 40% tashlanadi)
+        const int blk = 2400; std::vector<double> e;
+        for (int s = 0; s + blk <= b.getNumSamples(); s += blk)
+        { double sum = 0; for (int c = 0; c < b.getNumChannels(); ++c) { auto* d = b.getReadPointer (c, s); for (int i = 0; i < blk; ++i) sum += d[i] * d[i]; } e.push_back (sum / (blk * b.getNumChannels())); }
+        if (e.empty()) { const float r = b.getNumSamples() > 0 ? b.getRMSLevel (0, 0, b.getNumSamples()) : 0.0f; return juce::Decibels::gainToDecibels (r, -200.0f); }
+        std::sort (e.begin(), e.end());
+        double sum = 0; int n = 0; for (size_t i = e.size() * 4 / 10; i < e.size(); ++i) { sum += e[i]; ++n; }
+        return (float) (10.0 * std::log10 (juce::jmax (1e-12, sum / juce::jmax (1, n))));
+    }
+    void timerCallback() override
+    {
+        // master darajasini o'qish
+        if (app.edit)
+            if (auto* ctx = app.edit->getCurrentPlaybackContext())
+            {
+                if (measured != &ctx->masterLevels) { if (measured) measured->removeClient (client); ctx->masterLevels.addClient (client); measured = &ctx->masterLevels; }
+                float pk = -200; for (int c = 0; c < 2; ++c) pk = juce::jmax (pk, client.getAndClearAudioLevel (c).dB);
+                masterPeakDb = pk > masterPeakDb ? masterPeakDb + (pk - masterPeakDb) * 0.3f : juce::jmax (-200.0f, masterPeakDb - 0.6f);
+            }
+        if (autoLevel())
+        {
+            const float want = computeAutoDb();
+            if (std::abs (want - autoGainDb) > 0.05f) { autoGainDb += (want - autoGainDb) * 0.25f; applyGain(); }
+        }
     }
     ~MediaBrowser() override
     {
+        stopTimer();
+        if (measured) measured->removeClient (client);
         transport.stop(); transport.setSource (nullptr); player.setSource (nullptr);
         app.engine.getDeviceManager().deviceManager.removeAudioCallback (&player);
         tree->removeListener (this);
@@ -1463,9 +1527,12 @@ public:
         auto row = r.removeFromTop (28); const int w = (row.getWidth() - 18) / 4;
         for (auto* b : { &bMusic, &bDocs, &bProj, &bPick }) { b->setBounds (row.removeFromLeft (w)); row.removeFromLeft (6); }
         r.removeFromTop (26);
-        auto prev = r.removeFromBottom (124);
+        auto prev = r.removeFromBottom (152);
         auto sb = prev.removeFromTop (24); const int bw = (sb.getWidth() - 6) / 2;
         bpmB.setBounds (sb.removeFromLeft (bw)); sb.removeFromLeft (6); keyB.setBounds (sb);
+        prev.removeFromTop (4);
+        auto vr = prev.removeFromTop (22);
+        autoB.setBounds (vr.removeFromLeft (80)); vr.removeFromLeft (6); volS.setBounds (vr);
         tree->setBounds (r);
     }
     void paint (juce::Graphics& g) override
@@ -1488,6 +1555,9 @@ public:
             g.setColour (red); g.fillRoundedRectangle (bar.withWidth (len > 0 ? bar.getWidth() * (float) (pos / len) : 0), 2);
             caps (g, transport.isPlaying() ? U ("\xe2\x96\xa0 TO'XTATISH UCHUN BOSING") : U ("2X BOSING: TREKKA QO'SHISH"), box.reduced (10, 0).withTrimmedTop (22).withHeight (12), 8.5f, dim);
             if (syncInfo.isNotEmpty()) label (g, syncInfo, box.reduced (10, 0).withTrimmedTop (36).withHeight (14), 9.5f, green, Justification::centredLeft, 600);
+            if (autoLevel() && sampleRmsDb > -100)
+                label (g, "AUTO LVL " + String (autoGainDb > 0 ? "+" : "") + String (autoGainDb, 1) + " dB" + (masterPeakDb > -60 ? U (" \xc2\xb7 mix'ga") : U (" \xc2\xb7 -20 dBFS")),
+                       box.reduced (10, 0).withTrimmedTop (36).withHeight (14), 9, yellow, Justification::centredRight, 600);
         }
         else label (g, U ("Faylni bir marta bosing \xe2\x80\x94 eshitasiz, 2x \xe2\x80\x94 trekka qo'shiladi, sudrab tashlash ham mumkin"),
                     box.reduced (10, 6), 10.5f, dim, Justification::centredLeft, 400);
@@ -1509,12 +1579,14 @@ private:
         std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (f));
         if (r == nullptr) { repaint(); return; }
         const double sr = r->sampleRate, len = (double) r->lengthInSamples / sr;
-        if ((syncBpm() || syncKey()) && len < 90.0 && ! f.hasFileExtension ("mid;midi"))
+        if (len < 90.0 && ! f.hasFileExtension ("mid;midi"))
         {
             auto fi = sync::analyse (app.engine, f, projBpm(), &memBuf);
+            sampleRmsDb = activeRmsDb (memBuf);
+            autoGainDb = computeAutoDb();
             double speed = 1.0, semis = 0.0; juce::String inf;
             const auto arrow = juce::String::fromUTF8 (" \xe2\x86\x92 "), dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
-            if (syncBpm() && fi.loop && fi.bpm > 0) { speed = fi.bpm / projBpm(); inf << juce::String (fi.bpm, 1) << (fi.bpmGuessed ? "?" : "") << arrow << juce::String (projBpm(), 1) << " BPM"; }
+            if (syncBpm() && fi.loop && fi.bpm > 0 && (syncBpm() || syncKey())) { speed = fi.bpm / projBpm(); inf << juce::String (fi.bpm, 1) << (fi.bpmGuessed ? "?" : "") << arrow << juce::String (projBpm(), 1) << " BPM"; }
             if (syncKey() && ! fi.drum && fi.key.valid())
             {
                 semis = sync::semitoneShift (fi.key, projKey());
@@ -1531,7 +1603,9 @@ private:
         {
             reader = std::make_unique<juce::AudioFormatReaderSource> (r.release(), true);
             transport.setSource (reader.get(), 0, nullptr, sr);
+            sampleRmsDb = -200;
         }
+        applyGain();
         transport.setPosition (0); transport.start();
         repaint();
     }
@@ -1549,7 +1623,8 @@ private:
     juce::AudioFormatManager formats; juce::AudioSourcePlayer player; juce::AudioTransportSource transport;
     std::unique_ptr<juce::AudioFormatReaderSource> reader;
     juce::AudioBuffer<float> memBuf; std::unique_ptr<juce::MemoryAudioSource> memSrc; juce::String syncInfo;
-    juce::TextButton bpmB, keyB;
+    juce::TextButton bpmB, keyB, autoB; juce::Slider volS;
+    te::LevelMeasurer::Client client; te::LevelMeasurer* measured = nullptr;
 };
 
 // =============================================================================  Holat qatori

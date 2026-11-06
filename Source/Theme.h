@@ -176,7 +176,8 @@ namespace az
             using namespace juce;
             auto r = b.getLocalBounds().toFloat().reduced (0.5f);
             const bool on = b.getToggleState();
-            const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"]) : red;
+            const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"])
+                           : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : red;
             const float rad = b.getProperties().getWithDefault ("radius", 7.0f);
             g.setColour (on ? acc.withAlpha (0.16f) : Colours::white.withAlpha (down ? 0.09f : over ? 0.06f : 0.03f));
             g.fillRoundedRectangle (r, rad);
@@ -188,7 +189,8 @@ namespace az
         {
             using namespace juce;
             const bool on = b.getToggleState();
-            const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"]) : redSoft;
+            const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"])
+                           : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : redSoft;
             auto c = on ? acc.brighter (0.3f) : silver;
             if (! b.isEnabled()) c = c.withAlpha (0.35f);
             const auto t = b.getButtonText();
