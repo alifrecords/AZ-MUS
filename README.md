@@ -6,6 +6,21 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.5.0: Temp qutisi · Grid (Logic X) · Direct Offline Processing · Render Selection · mikser alohida oynada
+| Funksiya | Qayerda | Nima qiladi |
+|---|---|---|
+| **Temp qutisi** | Transport, displey yonida | ♩ 96.000 ▲▼ (Shift = 0.01), sudrash, g'ildirak, 2x bosib yozish · O'lchov 4/4 · **Tap** · ▾ (×2, ÷2, yaxlitlash, tayyor BPM) |
+| **Grid paneli** | Treklar ustida | Logic X tuzilmasi: **Smart · Bar · Beat** + bo'linmalar 1/1 … 1/128, **Triplet**, **Dotted** |
+| Snap turi | Grid paneli | Grid · Grid Relative · Events (klip chetlari) · Magnetic Cursor |
+| Quantize | Grid paneli, **Q** | Link to Grid yoki alohida qiymat; audio kliplar va MIDI notalar |
+| Vaqt formati | Grid paneli yoki POZITSIYA'ni bosish | Bars+Beats · Seconds · Timecode (24/25/30/60 fps) · Samples |
+| **Direct Offline Processing** | **F7**, klip menyusi, Audio menyusi | Jarayonlar steki: Envelope, Gain, Normalize, Fade In/Out, Invert, Reverse, DC, Silence. Asl fayl o'zgarmaydi, "Asliga qaytarish" bor |
+| Envelope **AUTO** | DOP → Envelope | Vokal rider: past iboralarni ko'taradi, balandlarini tushiradi (baland qismlarga yoki −20/−18/−16/−14 dBFS RMS standartiga). Sukunat va ibora chetlari ko'tarilmaydi. So'ng nuqtalarni qo'lda to'g'rilash mumkin (bosish = qo'shish, sudrash, 2x/o'ng tugma = o'chirish). Spline · Damped · Linear |
+| **Render Selection** | **Ctrl+Alt+B**, klip menyusi | As Separate Events / One Event · Dry / Channel Settings / Complete Signal Path / + Master FX · Tail · 16/24/32-bit float · Custom Name · joy · Mute/Keep/Remove Source |
+| **Mikser alohida oynada** | Mikserdagi ↗ tugma yoki chap chetidan sudrash | Mikser o'z oynasida ochiladi, ikkinchi displeyga olib o'tsa bo'ladi. Yopilsa joyiga qaytadi |
+
+![DOP Envelope AUTO](docs/dop_envelope.png)
+
 ## 0.4.0: Control Room · Monitor Match · Pro Tools uslubidagi yakuniy natija
 ![Control Room](docs/control_room.png)
 

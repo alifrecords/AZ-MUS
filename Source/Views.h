@@ -19,6 +19,8 @@ class LcdDisplay : public juce::Component
 {
 public:
     explicit LcdDisplay (AppEngine& a) : app (a) {}
+    std::function<juce::String()> positionText;     // tanlangan vaqt formatida
+    std::function<void()> onFormatClick;
     void paint (juce::Graphics& g) override
     {
         using namespace juce;
@@ -26,27 +28,26 @@ public:
         g.setColour (Colour (0xff050507)); g.fillRoundedRectangle (r, 10);
         g.setColour (Colours::white.withAlpha (0.08f)); g.drawRoundedRectangle (r, 10, 1);
         if (! app.edit) return;
-        auto& ts = app.edit->tempoSequence;
         caps (g, "POZITSIYA", { 14, 4, 120, 10 }, 8.5f);
-        auto pos = app.positionString();
-        g.setFont (font (21, 700, 0.04f));
+        auto pos = positionText ? positionText() : app.positionString();
         float x = 14;
+        const float fs = pos.length() > 12 ? 17.0f : 21.0f;
+        g.setFont (font (fs, 700, 0.04f));
         for (int i = 0; i < pos.length(); ++i)
         {
             const auto ch = String::charToString (pos[i]);
-            g.setColour (ch == "." ? red : Colours::white);
-            const float w = textWidth (font (21, 700, 0.04f), ch) + 1.5f;
+            g.setColour (ch == "." || ch == ":" ? red : Colours::white);
+            const float w = textWidth (font (fs, 700, 0.04f), ch) + 1.5f;
             g.drawText (ch, Rectangle<float> (x, 14, w + 4, 24), Justification::centredLeft); x += w;
         }
+        posCell = { 0, 0, x + 6, (float) getHeight() };
         cells.clear();
-        const String ks[] = { "VAQT", "TEMP", U ("O'LCHOV"), "TONALLIK" };
-        const auto sig = ts.getTimeSig (0);
-        const String vs[] = { app.timeString(), String (ts.getTempo (0)->getBpm(), 2), String (sig->numerator) + "/" + String (sig->denominator),
-                              app.edit->state.getProperty ("azKey", "A minor").toString() };
-        float cx = x + 22;
-        for (int i = 0; i < 4; ++i)
+        const String ks[] = { "VAQT", "TONALLIK" };
+        const String vs[] = { app.timeString(), app.edit->state.getProperty ("azKey", "A minor").toString() };
+        float cx = jmax (x + 18, 160.0f);
+        for (int i = 0; i < 2; ++i)
         {
-            const float w = i == 0 ? 82.0f : i == 3 ? 86.0f : 58.0f;
+            const float w = i == 0 ? 82.0f : 86.0f;
             caps (g, ks[i], { cx, 4, w, 10 }, 8.5f);
             label (g, vs[i], { cx, 16, w + 10, 20 }, 13, text, Justification::centredLeft, 600);
             cells.add ({ cx, 0, w, (float) getHeight() });
@@ -56,30 +57,8 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (! app.edit) return;
-        dragBpm = app.edit->tempoSequence.getTempo (0)->getBpm();
-        if (cells.size() == 4 && cells[2].contains (e.position)) showSigMenu();
-        if (cells.size() == 4 && cells[3].contains (e.position)) showKeyMenu();
-    }
-    void mouseDrag (const juce::MouseEvent& e) override
-    {
-        if (! app.edit || cells.size() < 4 || ! cells[1].contains (e.mouseDownPosition)) return;
-        const double bpm = juce::jlimit (30.0, 300.0, std::round ((dragBpm - e.getDistanceFromDragStartY() * 0.25) * 10) / 10);
-        app.edit->tempoSequence.getTempo (0)->setBpm (bpm); repaint();
-    }
-    void mouseDoubleClick (const juce::MouseEvent& e) override
-    {
-        if (! app.edit || cells.size() < 4 || ! cells[1].contains (e.position)) return;
-        auto* w = new juce::AlertWindow ("Temp (BPM)", {}, juce::MessageBoxIconType::NoIcon);
-        w->addTextEditor ("b", juce::String (app.edit->tempoSequence.getTempo (0)->getBpm(), 2));
-        w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey)); w->addButton (U ("Bekor"), 0);
-        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w] (int r)
-        { if (r) app.edit->tempoSequence.getTempo (0)->setBpm (juce::jlimit (30.0, 300.0, w->getTextEditorContents ("b").getDoubleValue())); repaint(); }), true);
-    }
-    void showSigMenu()
-    {
-        juce::PopupMenu m; const int sigs[][2] = { { 4, 4 }, { 3, 4 }, { 6, 8 }, { 2, 4 }, { 5, 4 }, { 7, 8 }, { 12, 8 } };
-        for (int i = 0; i < 7; ++i) m.addItem (i + 1, juce::String (sigs[i][0]) + "/" + juce::String (sigs[i][1]));
-        m.showMenuAsync ({}, [this, sigs] (int r) { if (r) { auto s = app.edit->tempoSequence.getTimeSig (0); s->numerator = sigs[r - 1][0]; s->denominator = sigs[r - 1][1]; repaint(); } });
+        if (posCell.contains (e.position) && onFormatClick) onFormatClick();
+        if (cells.size() == 2 && cells[1].contains (e.position)) showKeyMenu();
     }
     void showKeyMenu()
     {
@@ -91,7 +70,240 @@ public:
         { if (r) { app.edit->state.setProperty ("azKey", juce::String (notes[(r - 1) % 100]) + (r > 100 ? " minor" : " major"), &app.edit->getUndoManager()); repaint(); } });
     }
 private:
-    AppEngine& app; double dragBpm = 120; juce::Array<juce::Rectangle<float>> cells;
+    AppEngine& app; juce::Array<juce::Rectangle<float>> cells; juce::Rectangle<float> posCell;
+};
+
+// =============================================================================  Temp qutisi (Cubase transport kabi)
+// ♩ 96.000 ▲▼ · 4/4 · Tap · ▾
+class TempoBox : public juce::Component, private juce::Timer
+{
+public:
+    explicit TempoBox (AppEngine& a) : app (a)
+    {
+        for (auto* b : { &upB, &downB, &tapB, &moreB }) { addAndMakeVisible (b); b->getProperties().set ("radius", 4.0f); }
+        upB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb2")); downB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbc"));
+        tapB.setButtonText ("Tap"); moreB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xbe"));
+        upB.setTooltip (U ("Temp +1 (Shift: +0.01)")); downB.setTooltip (U ("Temp -1 (Shift: -0.01)"));
+        tapB.setTooltip (U ("Tap tempo: ritmga 4 marta bosing"));
+        upB.onClick = [this] { step (juce::ModifierKeys::currentModifiers.isShiftDown() ? 0.01 : 1.0); };
+        downB.onClick = [this] { step (juce::ModifierKeys::currentModifiers.isShiftDown() ? -0.01 : -1.0); };
+        upB.setRepeatSpeed (400, 70); downB.setRepeatSpeed (400, 70);
+        tapB.onClick = [this] { tap(); };
+        moreB.onClick = [this] { showMore(); };
+        startTimerHz (4);
+    }
+    double bpm() const { return app.edit ? app.edit->tempoSequence.getTempo (0)->getBpm() : 120.0; }
+    void setBpm (double b)
+    {
+        if (! app.edit) return;
+        b = juce::jlimit (20.0, 400.0, std::round (b * 1000.0) / 1000.0);
+        app.edit->tempoSequence.getTempo (0)->setBpm (b);
+        repaint(); if (onChanged) onChanged();
+    }
+    std::function<void()> onChanged;
+    void step (double d) { setBpm (bpm() + d); }
+    void tap()
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+        if (! taps.isEmpty() && now - taps.getLast() > 2.0) taps.clear();
+        taps.add (now);
+        while (taps.size() > 6) taps.remove (0);
+        if (taps.size() >= 2)
+        {
+            const double avg = (taps.getLast() - taps.getFirst()) / (taps.size() - 1);
+            if (avg > 0.15) setBpm (std::round (60.0 / avg * 100.0) / 100.0);
+        }
+        tapFlash = 3; repaint();
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (4, 7);
+        moreB.setBounds (r.removeFromRight (18)); r.removeFromRight (4);
+        tapB.setBounds (r.removeFromRight (40)); r.removeFromRight (6);
+        sigArea = r.removeFromRight (40).toFloat(); r.removeFromRight (6);
+        auto ud = r.removeFromRight (16);
+        upB.setBounds (ud.removeFromTop (ud.getHeight() / 2)); downB.setBounds (ud);
+        bpmArea = r.toFloat();
+    }
+    void paint (juce::Graphics& g) override
+    {
+        using namespace juce;
+        auto r = getLocalBounds().toFloat().reduced (0.5f);
+        g.setColour (Colour (0xff050507)); g.fillRoundedRectangle (r, 10);
+        g.setColour (Colours::white.withAlpha (0.08f)); g.drawRoundedRectangle (r, 10, 1);
+        caps (g, "TEMP", { bpmArea.getX() + 22, 3, 60, 10 }, 8.5f);
+        label (g, String::fromUTF8 ("\xe2\x99\xa9"), bpmArea.withWidth (20).translated (2, 4), 15, tapFlash > 0 ? red : silver, Justification::centred, 600);
+        label (g, String (bpm(), 3), bpmArea.withTrimmedLeft (22).translated (0, 5), 15, Colours::white, Justification::centredLeft, 700);
+        caps (g, U ("O'LCHOV"), { sigArea.getX(), 3, 60, 10 }, 8.5f);
+        if (app.edit) if (auto* sg = app.edit->tempoSequence.getTimeSig (0))
+            label (g, String (sg->numerator) + "/" + String (sg->denominator), sigArea.translated (0, 5), 14, text, Justification::centredLeft, 600);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragStart = bpm();
+        if (sigArea.contains (e.position)) showSigMenu();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! bpmArea.contains (e.mouseDownPosition)) return;
+        const double k = e.mods.isShiftDown() ? 0.01 : 0.2;
+        setBpm (std::round ((dragStart - e.getDistanceFromDragStartY() * k) * 100.0) / 100.0);
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (bpmArea.contains (e.position)) step ((w.deltaY > 0 ? 1.0 : -1.0) * (e.mods.isShiftDown() ? 0.01 : 1.0));
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (! app.edit || ! bpmArea.contains (e.position)) return;
+        auto* w = new juce::AlertWindow (U ("Temp (BPM)"), {}, juce::MessageBoxIconType::NoIcon);
+        w->addTextEditor ("b", juce::String (bpm(), 3));
+        w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey)); w->addButton (U ("Bekor"), 0);
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w] (int r) { if (r) setBpm (w->getTextEditorContents ("b").getDoubleValue()); }), true);
+    }
+    void showSigMenu()
+    {
+        juce::PopupMenu m; static const int sigs[][2] = { { 4, 4 }, { 3, 4 }, { 2, 4 }, { 5, 4 }, { 6, 8 }, { 7, 8 }, { 9, 8 }, { 12, 8 }, { 6, 4 }, { 2, 2 } };
+        for (int i = 0; i < 10; ++i) m.addItem (i + 1, juce::String (sigs[i][0]) + "/" + juce::String (sigs[i][1]));
+        m.showMenuAsync ({}, [this] (int r) { if (r && app.edit) { auto s = app.edit->tempoSequence.getTimeSig (0); s->numerator = sigs[r - 1][0]; s->denominator = sigs[r - 1][1]; repaint(); if (onChanged) onChanged(); } });
+    }
+    void showMore()
+    {
+        juce::PopupMenu m;
+        m.addItem (1, U ("Temp \xc3\x97 2 (double time)")); m.addItem (2, U ("Temp \xc3\xb7 2 (half time)"));
+        m.addItem (3, U ("Butun songa yaxlitlash")); m.addSeparator();
+        for (double b : { 70.0, 80.0, 90.0, 96.0, 100.0, 110.0, 120.0, 128.0, 140.0 }) m.addItem (100 + (int) b, juce::String ((int) b) + " BPM");
+        m.showMenuAsync ({}, [this] (int r)
+        {
+            if (r == 1) setBpm (bpm() * 2); if (r == 2) setBpm (bpm() / 2); if (r == 3) setBpm (std::round (bpm()));
+            if (r >= 100) setBpm (r - 100);
+        });
+    }
+private:
+    void timerCallback() override { if (tapFlash > 0 && --tapFlash == 0) repaint(); }
+    AppEngine& app; juce::TextButton upB, downB, tapB, moreB;
+    juce::Rectangle<float> bpmArea, sigArea; juce::Array<double> taps; double dragStart = 120; int tapFlash = 0;
+};
+
+// =============================================================================  Grid paneli (Logic X tuzilmasi + Cubase bo'linmalari)
+// [# Grid: 1/8 ▾] [Snap: Grid ▾] [Q 1/8 ▾] [Q] [Bars+Beats ▾]
+class GridBar : public juce::Component
+{
+public:
+    std::function<void()> onQuantize, onChanged;
+    GridBar (AppEngine& a, ViewState& v) : app (a), vs (v)
+    {
+        for (auto* b : { &gridB, &snapTypeB, &qB, &qApplyB, &fmtB }) { addAndMakeVisible (b); b->getProperties().set ("radius", 5.0f); }
+        gridB.setTooltip (U ("Grid: bo'linma (Smart \xc2\xb7 Bar \xc2\xb7 Beat \xc2\xb7 1/1 \xe2\x80\xa6 1/128, Triplet, Dotted)"));
+        snapTypeB.setTooltip (U ("Snap turi")); qB.setTooltip (U ("Quantize qiymati")); qApplyB.setTooltip (U ("Tanlanganlarni quantize qilish (Q)"));
+        fmtB.setTooltip (U ("Vaqt formati"));
+        qApplyB.setButtonText ("Q");
+        gridB.onClick = [this] { showGridMenu(); };
+        snapTypeB.onClick = [this] { showSnapMenu(); };
+        qB.onClick = [this] { showQMenu(); };
+        qApplyB.onClick = [this] { if (onQuantize) onQuantize(); };
+        fmtB.onClick = [this] { showFormatMenu(); };
+        refresh();
+    }
+    void refresh()
+    {
+        gridB.setButtonText (juce::String::fromUTF8 ("# ") + vs.gridName() + juce::String::fromUTF8 ("  \xe2\x96\xbe"));
+        const char* st[] = { "Grid", "Grid Relative", "Events", "Magnetic Cursor" };
+        snapTypeB.setButtonText (juce::String (st[vs.snapType]) + juce::String::fromUTF8 ("  \xe2\x96\xbe"));
+        qB.setButtonText (juce::String ("Q  ") + (vs.linkQ ? vs.gridName() : ViewState::divisionName (vs.quantize)) + juce::String::fromUTF8 ("  \xe2\x96\xbe"));
+        const char* fm[] = { "Bars+Beats", "Seconds", "Timecode", "Samples" };
+        fmtB.setButtonText (juce::String (fm[vs.timeFormat]) + juce::String::fromUTF8 ("  \xe2\x96\xbe"));
+        repaint();
+    }
+    double quantizeBeats() const { return vs.linkQ ? vs.gridBeats (*app.edit) : vs.quantize; }
+
+    static void addDivisions (juce::PopupMenu& m, int base, double current, bool active)
+    {
+        static const double ds[] = { 4, 2, 1, 0.5, 0.25, 0.125, 0.0625, 0.03125 };
+        for (int i = 0; i < 8; ++i)  m.addItem (base + i, ViewState::divisionName (ds[i]), true, active && std::abs (current - ds[i]) < 1e-6);
+        m.addSeparator();
+        for (int i = 1; i < 7; ++i)  m.addItem (base + 10 + i, ViewState::divisionName (ds[i]).replace ("T", "") + "  Triplet", true, active && std::abs (current - ds[i] * 2 / 3) < 1e-6);
+        m.addSeparator();
+        for (int i = 1; i < 7; ++i)  m.addItem (base + 20 + i, ViewState::divisionName (ds[i]) + "  Dotted", true, active && std::abs (current - ds[i] * 1.5) < 1e-6);
+    }
+    static double divisionFromId (int id)
+    {
+        static const double ds[] = { 4, 2, 1, 0.5, 0.25, 0.125, 0.0625, 0.03125 };
+        if (id < 10) return ds[id]; if (id < 20) return ds[id - 10] * 2.0 / 3.0; return ds[id - 20] * 1.5;
+    }
+    void showGridMenu()
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader (U ("Logic X: snap rejimi"));
+        m.addItem (1, U ("Smart (zoomga qarab)"), true, vs.gridMode == ViewState::gridSmart);
+        m.addItem (2, "Bar", true, vs.gridMode == ViewState::gridBar);
+        m.addItem (3, "Beat", true, vs.gridMode == ViewState::gridBeat);
+        m.addSectionHeader (U ("Bo'linma (Division)"));
+        addDivisions (m, 100, vs.division, vs.gridMode == ViewState::gridDivision);
+        m.addSeparator();
+        m.addItem (5, U ("Snap yoqilgan (J)"), true, vs.snap);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&gridB), [this] (int r)
+        {
+            if (r == 1) vs.gridMode = ViewState::gridSmart; if (r == 2) vs.gridMode = ViewState::gridBar; if (r == 3) vs.gridMode = ViewState::gridBeat;
+            if (r == 5) vs.snap = ! vs.snap;
+            if (r >= 100) { vs.gridMode = ViewState::gridDivision; vs.division = divisionFromId (r - 100); vs.snap = true; }
+            if (r) changed();
+        });
+    }
+    void showSnapMenu()
+    {
+        juce::PopupMenu m;
+        m.addItem (1, U ("Grid \xe2\x80\x94 to'g'ridan-to'g'ri gridga"), true, vs.snapType == 0);
+        m.addItem (2, U ("Grid Relative \xe2\x80\x94 gridga nisbatan joy saqlanadi"), true, vs.snapType == 1);
+        m.addItem (3, U ("Events \xe2\x80\x94 klip chetlariga yopishadi"), true, vs.snapType == 2);
+        m.addItem (4, U ("Magnetic Cursor \xe2\x80\x94 kursorga yopishadi"), true, vs.snapType == 3);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&snapTypeB), [this] (int r) { if (r) { vs.snapType = r - 1; changed(); } });
+    }
+    void showQMenu()
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Link to Grid", true, vs.linkQ);
+        m.addSeparator();
+        addDivisions (m, 100, vs.quantize, ! vs.linkQ);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&qB), [this] (int r)
+        {
+            if (r == 1) vs.linkQ = ! vs.linkQ;
+            if (r >= 100) { vs.quantize = divisionFromId (r - 100); vs.linkQ = false; }
+            if (r) changed();
+        });
+    }
+    void showFormatMenu()
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Bars+Beats", true, vs.timeFormat == 0); m.addItem (2, "Seconds", true, vs.timeFormat == 1);
+        m.addItem (3, "Timecode", true, vs.timeFormat == 2); m.addItem (4, "Samples", true, vs.timeFormat == 3);
+        juce::PopupMenu fps; for (int f : { 24, 25, 30, 60 }) fps.addItem (10 + f, juce::String (f) + " fps", true, vs.fps == f);
+        m.addSubMenu ("Timecode fps", fps);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&fmtB), [this] (int r)
+        {
+            if (r >= 1 && r <= 4) vs.timeFormat = r - 1;
+            if (r > 10) { vs.fps = r - 10; vs.timeFormat = ViewState::fmtTimecode; }
+            if (r) changed();
+        });
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6, 3);
+        gridB.setBounds (r.removeFromLeft (92)); r.removeFromLeft (6);
+        snapTypeB.setBounds (r.removeFromLeft (128)); r.removeFromLeft (14);
+        qB.setBounds (r.removeFromLeft (92)); r.removeFromLeft (4);
+        qApplyB.setBounds (r.removeFromLeft (30)); r.removeFromLeft (14);
+        fmtB.setBounds (r.removeFromLeft (112));
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (juce::Colour (0xff0b0a0d));
+        g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0, (float) getWidth());
+    }
+    juce::TextButton gridB, snapTypeB, qB, qApplyB, fmtB;
+private:
+    void changed() { refresh(); vs.changed(); if (onChanged) onChanged(); }
+    AppEngine& app; ViewState& vs;
 };
 
 // =============================================================================  Yuqori panel
@@ -103,9 +315,9 @@ public:
     std::function<void (int)> onLanguage, onTogglePanel, onUiZoom;
     float uiScale = 1.0f;
 
-    TopBar (AppEngine& a, juce::MenuBarModel* model) : app (a), menu (model), lcd (a)
+    TopBar (AppEngine& a, juce::MenuBarModel* model) : app (a), menu (model), lcd (a), tempo (a)
     {
-        addAndMakeVisible (menu); addAndMakeVisible (lcd);
+        addAndMakeVisible (menu); addAndMakeVisible (lcd); addAndMakeVisible (tempo);
         iconButton (startB, "#start", "Boshiga (Home / Num .)"); iconButton (rewB, "#rew", "Orqaga (Num -)"); iconButton (ffB, "#ff", "Oldinga (Num +)");
         iconButton (stopB, "#stop", "To'xtatish (Num 0)"); iconButton (playB, "#play", "Ijro (Space / Enter)", green); iconButton (recB, "#rec", "Yozish (R / Num *)", red);
         iconButton (loopB, "#loop", "Loop (L / Num /)"); iconButton (clickB, "#click", "Metronom (C)");
@@ -149,7 +361,8 @@ public:
         r.removeFromRight (cpuW);
         for (auto* b : { &pMix, &pMedia, &pInsp }) { b->setBounds (r.removeFromRight (32).withSizeKeepingCentre (32, 28)); r.removeFromRight (4); }
         r.removeFromRight (10);
-        const int lcdW = juce::jlimit (330, 480, r.getWidth() - 8 * 38 - 10);
+        tempo.setBounds (r.removeFromRight (232).withSizeKeepingCentre (232, 42)); r.removeFromRight (8);
+        const int lcdW = juce::jlimit (300, 420, r.getWidth() - 8 * 38 - 10);
         lcd.setBounds (r.removeFromRight (lcdW).withSizeKeepingCentre (lcdW, 42));
         r.removeFromRight (10);
         for (auto* b : { &clickB, &loopB, &recB, &playB, &stopB, &ffB, &rewB, &startB })
@@ -192,11 +405,13 @@ public:
         recB.setToggleState (t.isRecording(), juce::dontSendNotification);
         loopB.setToggleState (t.looping, juce::dontSendNotification);
         clickB.setToggleState (app.edit->clickTrackEnabled, juce::dontSendNotification);
-        lcd.repaint(); if (cpuW > 0) repaint (getWidth() - cpuW - 20, menuH, cpuW + 20, barH);
+        lcd.repaint(); tempo.repaint(); if (cpuW > 0) repaint (getWidth() - cpuW - 20, menuH, cpuW + 20, barH);
     }
     juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB, pInsp, pMedia, pMix, zoomOutB, zoomInB;
+    LcdDisplay& getLcd() { return lcd; }
+    TempoBox& getTempo() { return tempo; }
 private:
-    AppEngine& app; juce::MenuBarComponent menu; LcdDisplay lcd;
+    AppEngine& app; juce::MenuBarComponent menu; LcdDisplay lcd; TempoBox tempo;
     juce::OwnedArray<juce::TextButton> langB; int cpuW = 158;
 };
 
@@ -834,7 +1049,21 @@ class Mixer : public juce::Component, private juce::Timer
 {
 public:
     std::function<void (te::EditItemID, float)> onTrackLevel;
-    explicit Mixer (AppEngine& a) : app (a) { addAndMakeVisible (vp); vp.setViewedComponent (&holder, false); vp.setScrollBarsShown (false, true); startTimerHz (25); }
+    std::function<void()> onDetach;          // alohida oynaga ajratish / qaytarish
+    bool detached = false;
+    explicit Mixer (AppEngine& a) : app (a)
+    {
+        addAndMakeVisible (vp); vp.setViewedComponent (&holder, false); vp.setScrollBarsShown (false, true); startTimerHz (25);
+        addAndMakeVisible (detachB); detachB.getProperties().set ("radius", 4.0f);
+        detachB.setButtonText (juce::String::fromUTF8 ("\xe2\x86\x97"));
+        detachB.setTooltip (U ("Mikserni alohida oynaga ajratish (ikkinchi displeyga olib o'tish mumkin). Chap chetdan sudrab ham ajratsa bo'ladi."));
+        detachB.onClick = [this] { if (onDetach) onDetach(); };
+    }
+    void mouseDown (const juce::MouseEvent& e) override { dragFromEdge = e.x < 28 && ! detached; }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragFromEdge && e.getDistanceFromDragStart() > 40) { dragFromEdge = false; if (onDetach) onDetach(); }
+    }
     void rebuild()
     {
         strips.clear(); ids.clear(); master.reset(); croom.reset();
@@ -847,6 +1076,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced (10, 8);
+        detachB.setBounds (4, 6, 22, 20);
         r.removeFromLeft (18);
         if (croom) { croom->setBounds (r.removeFromRight (250)); r.removeFromRight (8); }
         if (master) master->setBounds (r.removeFromRight (104));
@@ -860,8 +1090,9 @@ public:
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff0e0c10), 0, 0, juce::Colour (0xff09080b), 0, (float) getHeight(), false)); g.fillAll();
         g.setColour (line); g.drawHorizontalLine (0, 0, (float) getWidth());
         juce::Graphics::ScopedSaveState s (g);
+        g.setColour (juce::Colours::white.withAlpha (0.025f)); g.fillRect (0, 30, 26, getHeight() - 36);
         g.addTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi, 18, (float) getHeight() * 0.5f));
-        caps (g, "MIKSER", { 18 - 60, (float) getHeight() * 0.5f - 8, 120, 12 }, 9.5f, dim2, juce::Justification::centred);
+        caps (g, detached ? "MIKSER" : U ("MIKSER  \xe2\x87\xa1 sudrang"), { 18 - 60, (float) getHeight() * 0.5f - 8, 120, 12 }, 9.5f, dim2, juce::Justification::centred);
     }
 private:
     void timerCallback() override
@@ -872,6 +1103,7 @@ private:
     AppEngine& app; juce::Viewport vp; juce::Component holder;
     juce::OwnedArray<ChannelStrip> strips; juce::Array<te::EditItemID> ids; std::unique_ptr<ChannelStrip> master;
     std::unique_ptr<ControlRoomStrip> croom;
+    juce::TextButton detachB; bool dragFromEdge = false;
 public:
     ControlRoomStrip* controlRoomStrip() { return croom.get(); }
 };

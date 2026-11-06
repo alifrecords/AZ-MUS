@@ -376,6 +376,108 @@ inline int runSelfTest (const juce::StringArray& args)
         check (r4 && r4->bitsPerSample == 32 && r4->usesFloatingPointData, "WAV 32-bit float eksport");
     }
 
+    // ================= 0.5: Grid · Quantize · DOP (Envelope AUTO) · Render Selection
+    {
+        auto a6 = std::make_unique<az::AppEngine>(); a6->newProject (dir.getChildFile ("t05.azmus"));
+        auto& e6 = *a6->edit; auto& ts6 = e6.tempoSequence; ts6.getTempo (0)->setBpm (120.0);
+        az::ViewState v6; v6.pxPerSec = 100;
+        // Grid: 1/8 triplet (1/3 beat = 0.1667 s @120)
+        v6.gridMode = az::ViewState::gridDivision; v6.division = 0.5 * 2.0 / 3.0;
+        const double s1 = az::snapTime (e6, 0.30, v6).inSeconds();
+        v6.division = 0.75;   // 1/8 dotted = 0.375 s
+        const double s2 = az::snapTime (e6, 0.40, v6).inSeconds();
+        check (std::abs (s1 - 1.0 / 3.0) < 1e-6 && std::abs (s2 - 0.375) < 1e-6 && az::ViewState::divisionName (0.5 * 2.0 / 3.0) == "1/8T" && az::ViewState::divisionName (0.75) == "1/8.",
+               "Grid: 1/8 Triplet va 1/8 Dotted to'g'ri snap qilinadi");
+        v6.division = 0.5; v6.snapType = az::ViewState::snapGridRelative;
+        const double rel = az::snapMove (e6, te::TimePosition::fromSeconds (0.10), 0.27, v6).inSeconds();   // +0.27 s -> +0.25 s
+        check (std::abs (rel - 0.35) < 1e-6, "Snap: Grid Relative (klipning gridga nisbatan joyi saqlanadi)");
+        v6.timeFormat = az::ViewState::fmtTimecode; v6.fps = 25;
+        const auto tc = az::formatTime (e6, te::TimePosition::fromSeconds (61.5), v6);
+        v6.timeFormat = az::ViewState::fmtSamples;
+        const auto smp = az::formatTime (e6, te::TimePosition::fromSeconds (1.0), v6, 48000.0);
+        check (tc == "00:01:01:12" && smp == "48000", "Vaqt formati: Timecode va Samples");
+
+        // DOP uchun test audio: baland va past iboralar (-12 / -30 dBFS)
+        const auto wf = dir.getChildFile ("uneven_vocal.wav");
+        {
+            const int sr = 48000, n = sr * 8; juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i)
+            {
+                const double t = (double) i / sr; const int ph = (int) (t / 1.0);
+                const float amp = ph % 4 == 3 ? 0.0f : (ph % 2 == 0 ? 0.35f : 0.045f);
+                const float v = amp * (float) std::sin (2 * juce::MathConstants<double>::pi * 220 * t) * (float) juce::jmin (1.0, std::fmod (t, 1.0) / 0.02);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            juce::WavAudioFormat wav; wf.deleteFile();
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (wf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n);
+        }
+        auto* vt = te::getAudioTracks (e6)[0];
+        auto clip = vt->insertWaveClip ("Vokal take", wf, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (8.0)), {} }, false);
+        auto* wc = dynamic_cast<te::WaveAudioClip*> (clip.get());
+        auto spread = [&] (const juce::File& file)
+        {
+            juce::AudioBuffer<float> b; double sr = 48000; az::dop::readFile (a6->engine, file, b, sr);
+            std::vector<float> lv;
+            for (int ph = 0; ph < 8; ++ph) { if (ph % 4 == 3) continue; const int a0 = (int) ((ph + 0.3) * sr); lv.push_back (juce::Decibels::gainToDecibels (b.getRMSLevel (0, a0, (int) (0.4 * sr)))); }
+            return *std::max_element (lv.begin(), lv.end()) - *std::min_element (lv.begin(), lv.end());
+        };
+        const float before = spread (wf);
+        auto st = az::dop::stack (*wc, true);
+        auto envP = az::dop::makeProc ("envelope"); envP.setProperty ("auto", true, nullptr); envP.setProperty ("target", 0, nullptr); envP.setProperty ("range", 18.0, nullptr);
+        st.addChild (envP, -1, nullptr);
+        az::dop::refreshAuto (*wc, st, a6->engine, nullptr);
+        const bool rendered = az::dop::render (*wc, a6->engine, a6->editFile.getParentDirectory().getChildFile ("Audio"));
+        const auto newFile = wc->getSourceFileReference().getFile();
+        const float after = spread (newFile);
+        std::printf ("       DOP Envelope AUTO: iboralar farqi %.1f dB -> %.1f dB (%d nuqta)\n", before, after, (int) az::dop::points (envP).size());
+        check (rendered && newFile != wf && newFile.getFileName().contains ("_DOP_") && after < before * 0.35f,
+               "Direct Offline Processing: Envelope AUTO past/baland iboralarni tenglashtirdi");
+        // qo'lda nuqta qo'shish
+        auto pts = az::dop::points (envP); pts.push_back ({ 0.5, -6.0 });
+        std::sort (pts.begin(), pts.end(), [] (auto& x, auto& y) { return x.x < y.x; });
+        az::dop::setPoints (envP, pts, nullptr); envP.setProperty ("auto", false, nullptr);
+        az::dop::render (*wc, a6->engine, a6->editFile.getParentDirectory().getChildFile ("Audio"));
+        check (wc->getSourceFileReference().getFile() != newFile, "DOP: qo'lda tahrir qilingan envelope qayta qo'llanadi");
+        // Gain + Normalize steki va asliga qaytarish
+        st.addChild (az::dop::makeProc ("normalize"), -1, nullptr);
+        az::dop::render (*wc, a6->engine, a6->editFile.getParentDirectory().getChildFile ("Audio"));
+        { juce::AudioBuffer<float> b; double sr; az::dop::readFile (a6->engine, wc->getSourceFileReference().getFile(), b, sr);
+          check (std::abs (juce::Decibels::gainToDecibels (b.getMagnitude (0, b.getNumSamples())) + 1.0f) < 0.05f, "DOP: Normalize -1 dBFS"); }
+        st.removeAllChildren (nullptr);
+        az::dop::render (*wc, a6->engine, a6->editFile.getParentDirectory().getChildFile ("Audio"));
+        check (wc->getSourceFileReference().getFile() == wf, "DOP: barcha jarayonlar olib tashlansa asl faylga qaytadi");
+
+        // Render Selection: Channel Settings -> yangi trek, asl klip mute
+        az::RenderOptions ro; ro.processing = 1; ro.bitDepth = 32; ro.source = 0;
+        const int tracksBefore = te::getAudioTracks (e6).size();
+        const auto msg = az::renderSelection (*a6, juce::Array<te::Clip*> { clip.get() }, ro);
+        auto tracksNow = te::getAudioTracks (e6);
+        bool rendTrack = false; for (auto* t : tracksNow) if (t->getName().endsWith ("(Render)") && t->getClips().size() == 1) rendTrack = true;
+        check (tracksNow.size() == tracksBefore + 1 && rendTrack && clip->isMuted(), "Render Selection (Channel Settings): yangi trek, asl event mute");
+        // Dry + Remove: o'rniga qo'yiladi
+        clip->setMuted (false);
+        az::RenderOptions ro2; ro2.processing = 0; ro2.source = 2; ro2.customName = true; ro2.name = "Azimxodjayev Music - Take";
+        az::renderSelection (*a6, juce::Array<te::Clip*> { clip.get() }, ro2);
+        bool replaced = false; for (auto* c : vt->getClips()) if (c->getName().startsWith ("Azimxodjayev Music - Take")) replaced = true;
+        check (replaced && vt->getClips().size() == 1, "Render Selection (Dry, Custom Name, Remove Source): event almashtirildi");
+
+        // Quantize: MIDI notalar 1/16 ga
+        auto mc6 = std::make_unique<az::MainComponent> (*a6);
+        auto* it = a6->addInstrumentTrack ("Q test");
+        auto midiClip = it->insertMIDIClip (te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (4.0)), nullptr);
+        midiClip->getSequence().addNote (60, te::BeatPosition::fromBeats (0.13), te::BeatDuration::fromBeats (0.5), 100, 0, nullptr);
+        midiClip->getSequence().addNote (62, te::BeatPosition::fromBeats (1.40), te::BeatDuration::fromBeats (0.5), 100, 0, nullptr);
+        auto& gv = mc6->getViewState(); gv.linkQ = false; gv.quantize = 0.25;
+        mc6->quantizeClips (juce::Array<te::Clip*> { midiClip.get() });
+        auto& ns = midiClip->getSequence().getNotes();
+        check (ns.size() == 2 && std::abs (ns[0]->getStartBeat().inBeats() - 0.25) < 1e-6 && std::abs (ns[1]->getStartBeat().inBeats() - 1.5) < 1e-6,
+               "Quantize: MIDI notalar 1/16 gridga tushdi");
+        // Tap tempo / temp qutisi
+        az::TempoBox tb (*a6); tb.setBpm (96.0004);
+        check (std::abs (ts6.getTempo (0)->getBpm() - 96.0) < 1e-3, "Temp qutisi: 96.000 BPM o'rnatildi");
+        mc6.reset();
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

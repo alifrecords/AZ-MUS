@@ -15,9 +15,60 @@ struct ViewState : public juce::ChangeBroadcaster
     bool snap = true;
     int tool = 0;     // 0 tanlash, 1 qaychi, 2 o'chirg'ich, 3 mute
 
+    // ---- Grid (Logic X tuzilmasi: Smart · Bar · Beat · Division) + Cubase bo'linmalari
+    enum GridMode { gridSmart = 0, gridBar, gridBeat, gridDivision };
+    int gridMode = gridDivision;
+    double division = 0.5;                 // choraklarda (beat): 1/8 = 0.5, 1/8T = 1/3, 1/8. = 0.75
+    // ---- Snap turi (Cubase "Bar" qutisi / Logic "Snap Regions to Relative Value")
+    enum SnapType { snapGrid = 0, snapGridRelative, snapEvents, snapCursor };
+    int snapType = snapGrid;
+    // ---- vaqt formati (Bars+Beats · Seconds · Timecode · Samples)
+    enum TimeFormat { fmtBars = 0, fmtSeconds, fmtTimecode, fmtSamples };
+    int timeFormat = fmtBars; int fps = 25;
+    // ---- Quantize
+    double quantize = 0.5; bool linkQ = true;
+
     float secToX (double s) const { return (float) ((s - startSec) * pxPerSec); }
     double xToSec (float x) const { return startSec + (double) x / pxPerSec; }
     void changed() { sendChangeMessage(); }
+
+    static juce::String divisionName (double beats)
+    {
+        struct D { double b; const char* n; };
+        static const D ds[] = { {4,"1/1"},{2,"1/2"},{1,"1/4"},{0.5,"1/8"},{0.25,"1/16"},{0.125,"1/32"},{0.0625,"1/64"},{0.03125,"1/128"} };
+        for (auto& d : ds)
+        {
+            if (std::abs (beats - d.b) < 1e-6) return d.n;
+            if (std::abs (beats - d.b * 2.0 / 3.0) < 1e-6) return juce::String (d.n) + "T";
+            if (std::abs (beats - d.b * 1.5) < 1e-6) return juce::String (d.n) + ".";
+        }
+        return juce::String (beats, 3);
+    }
+    juce::String gridName() const
+    {
+        if (gridMode == gridSmart) return "Smart";
+        if (gridMode == gridBar) return "Bar";
+        if (gridMode == gridBeat) return "Beat";
+        return divisionName (division);
+    }
+    // joriy grid qadami (chorak = 1 beat)
+    double gridBeats (te::Edit& e) const
+    {
+        auto& ts = e.tempoSequence;
+        const auto* sig = ts.getTimeSig (0);
+        const double barBeats = sig ? sig->numerator * 4.0 / sig->denominator : 4.0;
+        switch (gridMode)
+        {
+            case gridBar:  return barBeats;
+            case gridBeat: return sig ? 4.0 / sig->denominator : 1.0;
+            case gridDivision: return division;
+            default: break;
+        }
+        // Smart: zoomga qarab eng kichik o'qiladigan qadam (>= 14 px)
+        const double beatPx = pxPerSec * 60.0 / ts.getTempo (0)->getBpm();
+        for (double g : { 0.0625, 0.125, 0.25, 0.5, 1.0 }) if (beatPx * g >= 14.0) return g;
+        return beatPx * barBeats >= 14.0 ? barBeats : barBeats * 4.0;
+    }
 };
 
 inline te::AudioTrack* findTrack (te::Edit& e, te::EditItemID id)
@@ -26,15 +77,68 @@ inline te::AudioTrack* findTrack (te::Edit& e, te::EditItemID id)
     return nullptr;
 }
 
-inline te::TimePosition snapTime (te::Edit& e, double sec, const ViewState& vs, bool force = false)
+inline te::TimePosition snapToGrid (te::Edit& e, double sec, double gridBeats)
+{
+    auto& ts = e.tempoSequence;
+    const double b = ts.toBeats (te::TimePosition::fromSeconds (juce::jmax (0.0, sec))).inBeats();
+    return ts.toTime (te::BeatPosition::fromBeats (juce::jmax (0.0, std::round (b / gridBeats) * gridBeats)));
+}
+
+// exclude: sudralayotgan klip (o'z chetiga yopishmasin)
+inline te::TimePosition snapTime (te::Edit& e, double sec, const ViewState& vs, bool force = false, const te::Clip* exclude = nullptr)
 {
     if (! vs.snap && ! force) return te::TimePosition::fromSeconds (juce::jmax (0.0, sec));
+    const double tolSec = 10.0 / vs.pxPerSec;
+    if (vs.snapType == ViewState::snapEvents)
+    {
+        double best = -1, bd = tolSec;
+        for (auto* t : te::getAudioTracks (e))
+            for (auto* c : t->getClips())
+            {
+                if (c == exclude) continue;
+                for (double edge : { c->getPosition().getStart().inSeconds(), c->getPosition().getEnd().inSeconds() })
+                    if (std::abs (edge - sec) < bd) { bd = std::abs (edge - sec); best = edge; }
+            }
+        if (best >= 0) return te::TimePosition::fromSeconds (best);
+    }
+    if (vs.snapType == ViewState::snapCursor)
+    {
+        const double p = e.getTransport().getPosition().inSeconds();
+        if (std::abs (p - sec) < tolSec * 1.5) return te::TimePosition::fromSeconds (p);
+    }
+    return snapToGrid (e, sec, vs.gridBeats (e));
+}
+
+// Grid Relative: klipning gridga nisbatan joyi saqlanadi, siljish grid qadamiga yaxlitlanadi
+inline te::TimePosition snapMove (te::Edit& e, te::TimePosition origStart, double dtSec, const ViewState& vs, const te::Clip* exclude = nullptr)
+{
+    if (vs.snap && vs.snapType == ViewState::snapGridRelative)
+    {
+        auto& ts = e.tempoSequence;
+        const double b0 = ts.toBeats (origStart).inBeats();
+        const double b1 = ts.toBeats (te::TimePosition::fromSeconds (juce::jmax (0.0, origStart.inSeconds() + dtSec))).inBeats();
+        const double g = vs.gridBeats (e);
+        return ts.toTime (te::BeatPosition::fromBeats (juce::jmax (0.0, b0 + std::round ((b1 - b0) / g) * g)));
+    }
+    return snapTime (e, origStart.inSeconds() + dtSec, vs, false, exclude);
+}
+
+// vaqtni tanlangan formatda yozish (LCD, ruler)
+inline juce::String formatTime (te::Edit& e, te::TimePosition pos, const ViewState& vs, double sampleRate = 48000.0)
+{
+    const double s = pos.inSeconds();
+    switch (vs.timeFormat)
+    {
+        case ViewState::fmtSeconds:  return juce::String::formatted ("%d:%02d.%03d", (int) s / 60, (int) s % 60, (int) ((s - std::floor (s)) * 1000));
+        case ViewState::fmtTimecode: { const int t = (int) s; return juce::String::formatted ("%02d:%02d:%02d:%02d", t / 3600, (t / 60) % 60, t % 60, (int) ((s - t) * vs.fps)); }
+        case ViewState::fmtSamples:  return juce::String ((juce::int64) std::llround (s * sampleRate));
+        default: break;
+    }
     auto& ts = e.tempoSequence;
-    // zoomga qarab: hissa yoki 1/16
-    const double beatPx = vs.pxPerSec * 60.0 / ts.getTempo (0)->getBpm();
-    const double grid = beatPx > 60 ? 0.25 : beatPx > 18 ? 1.0 : 4.0;
-    const double b = ts.toBeats (te::TimePosition::fromSeconds (juce::jmax (0.0, sec))).inBeats();
-    return ts.toTime (te::BeatPosition::fromBeats (std::round (b / grid) * grid));
+    const auto bb = ts.toBarsAndBeats (pos);
+    const double frac = bb.getFractionalBeats().inBeats();
+    const int six = (int) (frac * 4.0) + 1, tick = (int) ((frac * 4.0 - (six - 1)) * 240.0);
+    return juce::String::formatted ("%03d.%d.%d.%03d", bb.bars + 1, bb.getWholeBeats() + 1, six, tick);
 }
 
 // =============================================================================  Ruler
@@ -73,7 +177,9 @@ public:
             const bool major = bar % barStep == 0;
             g.setColour (Colours::white.withAlpha (major ? 0.22f : 0.1f));
             g.fillRect (x, major ? 32.0f : 42.0f, 1.0f, major ? H - 32 : H - 42);
-            if (major) label (g, String (bar + 1), { x + 4, 30, 40, 14 }, 10, dim, Justification::centredLeft, 400);
+            if (major) label (g, vs.timeFormat == ViewState::fmtBars ? String (bar + 1)
+                                 : formatTime (e, ts.toTime (te::tempo::BarsAndBeats { bar, {} }), vs, app.engine.getDeviceManager().getSampleRate() > 0 ? app.engine.getDeviceManager().getSampleRate() : 48000.0),
+                              { x + 4, 30, vs.timeFormat == ViewState::fmtBars ? 40.0f : 90.0f, 14 }, 10, dim, Justification::centredLeft, 400);
             if (beatPx > 22)
                 for (int b = 1; b < 4; ++b)
                 {
@@ -185,12 +291,20 @@ public:
             const float x = vs.secToX (ts.toTime (te::tempo::BarsAndBeats { bar, {} }).inSeconds());
             if (x > W) break;
             g.setColour (Colours::white.withAlpha (0.06f)); g.fillRect (x, 0.0f, 1.0f, H);
-            if (beatPx > 22)
-                for (int b = 1; b < 4; ++b)
+            // grid chiziqlari (tanlangan bo'linma bo'yicha)
+            const double gb = vs.gridBeats (e);
+            const auto* sg = ts.getTimeSig (0);
+            const double barBeats = sg ? sg->numerator * 4.0 / sg->denominator : 4.0;
+            if (beatPx * gb >= 7.0 && gb < barBeats)
+            {
+                const double b0 = ts.toBeats (ts.toTime (te::tempo::BarsAndBeats { bar, {} })).inBeats();
+                for (double k = gb; k < barBeats - 1e-6; k += gb)
                 {
-                    const float bx = vs.secToX (ts.toTime (te::tempo::BarsAndBeats { bar, te::BeatDuration::fromBeats (b) }).inSeconds());
-                    g.setColour (Colours::white.withAlpha (0.025f)); g.fillRect (bx, 0.0f, 1.0f, H);
+                    const float bx = vs.secToX (ts.toTime (te::BeatPosition::fromBeats (b0 + k)).inSeconds());
+                    const bool beat = std::abs (k - std::round (k)) < 1e-6;
+                    g.setColour (Colours::white.withAlpha (beat ? 0.035f : 0.018f)); g.fillRect (bx, 0.0f, 1.0f, H);
                 }
+            }
         }
         // loop zonasi
         auto& tr = e.getTransport();
@@ -358,13 +472,13 @@ public:
         const double dt = (double) e.getDistanceFromDragStartX() / vs.pxPerSec;
         if (drag.resizeEnd)
         {
-            const auto end = snapTime (*app.edit, (drag.startTime + drag.origLen).inSeconds() + dt, vs);
+            const auto end = snapTime (*app.edit, (drag.startTime + drag.origLen).inSeconds() + dt, vs, false, c.get());
             if (end > drag.startTime + 0.05s) c->setEnd (end, true);
         }
         else if (drag.group.size() > 1)
         {
             // bir nechta klip birga: yetakchi klip snap qilinadi, qolganlari bir xil siljiydi
-            const auto lead = snapTime (*app.edit, drag.startTime.inSeconds() + dt, vs);
+            const auto lead = snapMove (*app.edit, drag.startTime, dt, vs, drag.clip.get());
             const auto shift = lead - drag.startTime;
             auto earliest = drag.groupStarts[0]; for (auto s : drag.groupStarts) earliest = juce::jmin (earliest, s);
             const auto safeShift = earliest + shift < te::TimePosition() ? te::TimePosition() - earliest : shift;
@@ -372,7 +486,7 @@ public:
         }
         else
         {
-            c->setStart (snapTime (*app.edit, drag.startTime.inSeconds() + dt, vs), false, true);
+            c->setStart (snapMove (*app.edit, drag.startTime, dt, vs, c.get()), false, true);
             if (auto* nt = trackAtY (e.y))
                 if (nt != c->getTrack()) c->moveTo (*nt);
         }
@@ -451,10 +565,17 @@ public:
         vs.changed();
     }
 
+    std::function<void()> onDop, onRenderSel, onBounce, onQuantize;
     void showClipMenu (te::Clip& c)
     {
         juce::PopupMenu m;
         m.addSectionHeader (c.getName());
+        const bool audio = dynamic_cast<te::WaveAudioClip*> (&c) != nullptr;
+        if (audio) { juce::PopupMenu::Item it ("Direct Offline Processing"); it.itemID = 10; it.shortcutKeyDescription = "F7"; m.addItem (std::move (it)); }
+        { juce::PopupMenu::Item it ("Bounce Selection"); it.itemID = 11; it.shortcutKeyDescription = "B"; m.addItem (std::move (it)); }
+        m.addItem (12, "Render Selection...");
+        { juce::PopupMenu::Item it ("Quantize"); it.itemID = 13; it.shortcutKeyDescription = "Q"; m.addItem (std::move (it)); }
+        m.addSeparator();
         m.addItem (1, U ("Kursor joyida bo'lish  (Ctrl+E)"));
         m.addItem (2, c.isMuted() ? U ("Ovozini yoqish") : U ("Ovozini o'chirish (mute)"));
         m.addItem (3, U ("Nusxa (Ctrl+D)"));
@@ -472,7 +593,11 @@ public:
             if (r == 3) sp->duplicate (*cp);
             if (r == 4) cp->removeFromParent();
             if (r == 5) if (auto* mc = dynamic_cast<te::MidiClip*> (cp.get())) if (sp->onOpenPianoRoll) sp->onOpenPianoRoll (*mc);
-            sp->repaint();
+            if (r == 10 && sp->onDop) sp->onDop();
+            if (r == 11 && sp->onBounce) sp->onBounce();
+            if (r == 12 && sp->onRenderSel) sp->onRenderSel();
+            if (r == 13 && sp->onQuantize) sp->onQuantize();
+            if (sp) sp->repaint();
         });
     }
 

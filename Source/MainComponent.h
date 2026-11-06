@@ -3,6 +3,7 @@
 // =============================================================================
 #pragma once
 #include "Views.h"
+#include "Dop.h"
 #include "PianoRoll.h"
 #include "Connections.h"
 
@@ -45,16 +46,20 @@ inline const KeyHelp keyHelp[] = {
     { "Ctrl+T",               "Trek qo'shish" },
     { "Ctrl+I",               "Audio import" },
     { "Ctrl+Shift+E",         "WAV'ga eksport" },
+    { "F7",                   "Direct Offline Processing (Envelope, AUTO balandlik, Gain, Normalize, Fade ...)" },
+    { "Q",                    "Quantize (tanlangan kliplar / MIDI notalar)" },
+    { "Ctrl+Alt+B",           "Render Selection (Dry / Channel / Complete Signal Path)" },
+    { "Mikser \xe2\x86\x97 / chetidan sudrash", "Mikserni alohida oynaga ajratish" },
 };
 
 class MainComponent : public juce::Component, public juce::MenuBarModel, private juce::ChangeListener, private juce::Timer
 {
 public:
     explicit MainComponent (AppEngine& a)
-        : app (a), top (a, this), inspector (a, vs), ruler (a, vs), headers (a, vs), lanes (a, vs), mixer (a), media (a), status (a)
+        : app (a), top (a, this), gridBar (a, vs), inspector (a, vs), ruler (a, vs), headers (a, vs), lanes (a, vs), mixer (a), media (a), status (a)
     {
         setOpaque (true);
-        for (auto* c : std::initializer_list<juce::Component*> { &top, &inspector, &ruler, &headers, &lanes, &mixer, &media, &status, &toolAdd, &toolSnap, &toolBounce })
+        for (auto* c : std::initializer_list<juce::Component*> { &top, &gridBar, &inspector, &ruler, &headers, &lanes, &mixer, &media, &status, &toolAdd, &toolSnap, &toolBounce })
             addAndMakeVisible (c);
         iconButton (toolAdd, "#plus", "Trek qo'shish (Ctrl+T)");
         iconButton (toolSnap, "#grid", "Snap (J)");
@@ -91,9 +96,23 @@ public:
         media.onInsertFile = [this] (const juce::File& f) { insertFileAtCursor (f); };
         inspector.onRoutingChanged = [this] { mixer.rebuild(); lanes.repaint(); headers.repaint(); };
         top.onUiZoom = [this] (int d) { if (onUiZoom) onUiZoom (d); };
+        top.getLcd().positionText = [this] { return app.edit ? formatTime (*app.edit, app.edit->getTransport().getPosition(), vs, sampleRate()) : juce::String(); };
+        top.getLcd().onFormatClick = [this] { gridBar.showFormatMenu(); };
+        top.getTempo().onChanged = [this] { refreshAll(); };
+        gridBar.onQuantize = [this] { quantizeSelected(); };
+        gridBar.onChanged = [this] { toolSnap.setToggleState (vs.snap, juce::dontSendNotification); savePrefs(); refreshAll(); };
+        lanes.onDop = [this] { openDop(); };
+        lanes.onRenderSel = [this] { openRender(); };
+        lanes.onBounce = [this] { bounce(); };
+        lanes.onQuantize = [this] { quantizeSelected(); };
+        mixer.onDetach = [this] { toggleMixerWindow(); };
 
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
         showInsp = pf.getBoolValue ("azShowInsp", true); showMedia = pf.getBoolValue ("azShowMedia", true); showMixer = pf.getBoolValue ("azShowMixer", true);
+        vs.gridMode = pf.getIntValue ("azGridMode", ViewState::gridDivision); vs.division = pf.getDoubleValue ("azGridDiv", 0.5);
+        vs.snapType = pf.getIntValue ("azSnapType", 0); vs.timeFormat = pf.getIntValue ("azTimeFmt", 0); vs.fps = pf.getIntValue ("azFps", 25);
+        vs.quantize = pf.getDoubleValue ("azQuant", 0.5); vs.linkQ = pf.getBoolValue ("azLinkQ", true);
+        gridBar.refresh();
         top.setPanels (showInsp, showMedia, showMixer);
 
         vs.addChangeListener (this);
@@ -103,7 +122,110 @@ public:
         startTimerHz (30);
         editChanged();
     }
-    ~MainComponent() override { app.onEditChanged = nullptr; app.removeChangeListener (this); vs.removeChangeListener (this); pianoRoll.reset(); connections.reset(); }
+    ~MainComponent() override
+    {
+        app.onEditChanged = nullptr; app.removeChangeListener (this); vs.removeChangeListener (this);
+        pianoRoll.reset(); connections.reset(); dopWindow.reset(); renderWindow.reset();
+        if (mixerWindow) { mixerWindow->clearContentComponent(); mixerWindow.reset(); }
+    }
+    double sampleRate() const { auto sr = app.engine.getDeviceManager().getSampleRate(); return sr > 0 ? sr : 48000.0; }
+    void savePrefs()
+    {
+        auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
+        pf.setValue ("azGridMode", vs.gridMode); pf.setValue ("azGridDiv", vs.division); pf.setValue ("azSnapType", vs.snapType);
+        pf.setValue ("azTimeFmt", vs.timeFormat); pf.setValue ("azFps", vs.fps); pf.setValue ("azQuant", vs.quantize); pf.setValue ("azLinkQ", vs.linkQ);
+    }
+
+    // ---------------------------------------------------------------- Quantize (Q)
+    juce::String quantizeClips (const juce::Array<te::Clip*>& clips)
+    {
+        if (! app.edit || clips.isEmpty()) return U ("Quantize: avval klip(lar)ni tanlang.");
+        auto& ts = app.edit->tempoSequence;
+        const double q = gridBar.quantizeBeats();
+        app.edit->getUndoManager().beginNewTransaction ("Quantize");
+        int notes = 0, moved = 0;
+        for (auto* c : clips)
+        {
+            if (auto* mc = dynamic_cast<te::MidiClip*> (c))
+            {
+                auto& seq = mc->getSequence();
+                for (auto* n : seq.getNotes())
+                {
+                    const double abs = ts.toBeats (mc->getTimeOfContentBeat (n->getStartBeat())).inBeats();
+                    const double qa = std::round (abs / q) * q;
+                    const auto newStart = mc->getContentBeatAtTime (ts.toTime (te::BeatPosition::fromBeats (qa)));
+                    if (std::abs (newStart.inBeats() - n->getStartBeat().inBeats()) > 1e-6) { n->setStartAndLength (newStart, n->getLengthBeats(), &app.edit->getUndoManager()); ++notes; }
+                }
+            }
+            else
+            {
+                const auto st = snapToGrid (*app.edit, c->getPosition().getStart().inSeconds(), q);
+                if (st != c->getPosition().getStart()) { c->setStart (st, false, true); ++moved; }
+            }
+        }
+        return U ("Quantize ") + ViewState::divisionName (q) + ": " + juce::String (moved) + U (" klip, ") + juce::String (notes) + U (" nota");
+    }
+    void quantizeSelected() { toast (quantizeClips (selectedClips())); refreshAll(); }
+
+    // ---------------------------------------------------------------- Direct Offline Processing (F7)
+    juce::Array<te::WaveAudioClip*> selectedAudioClips()
+    {
+        juce::Array<te::WaveAudioClip*> r;
+        for (auto* c : selectedClips()) if (auto* w = dynamic_cast<te::WaveAudioClip*> (c)) r.add (w);
+        return r;
+    }
+    void openDop()
+    {
+        auto cl = selectedAudioClips();
+        if (cl.isEmpty()) { toast (U ("Direct Offline Processing: avval audio klip(lar)ni tanlang.")); return; }
+        dopWindow = std::make_unique<DopWindow> (app, cl, [this] { lanes.repaint(); });
+        dopWindow->onClose = [this] { juce::MessageManager::callAsync ([this] { dopWindow.reset(); }); };
+    }
+    // ---------------------------------------------------------------- Render Selection
+    void openRender()
+    {
+        if (selectedClips().isEmpty()) { toast (U ("Render Selection: avval klip(lar)ni tanlang.")); return; }
+        renderWindow = std::make_unique<RenderWindow> (app, [this] (const RenderOptions& o)
+        {
+            if (app.edit && app.edit->getTransport().isPlaying()) app.edit->getTransport().stop (false, false);
+            toast (renderSelection (app, selectedClips(), o));
+            app.selection.deselectAll(); mixer.rebuild(); refreshAll();
+            juce::MessageManager::callAsync ([this] { renderWindow.reset(); });
+        }, [this] { renderWindow.reset(); });
+    }
+    // ---------------------------------------------------------------- mikserni alohida oynaga ajratish
+    struct MixerWindow : public juce::DocumentWindow
+    {
+        MixerWindow() : juce::DocumentWindow (juce::String::fromUTF8 ("AZ MUS  \xc2\xb7  ") + U ("Mikser"), bg0, juce::DocumentWindow::allButtons) {}
+        std::function<void()> onClose;
+        void closeButtonPressed() override { if (onClose) onClose(); }
+    };
+    void toggleMixerWindow()
+    {
+        if (mixerWindow)
+        {
+            auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
+            pf.setValue ("azMixerWin", mixerWindow->getWindowStateAsString());
+            mixerWindow->clearContentComponent(); mixerWindow.reset();
+            mixer.detached = false; addAndMakeVisible (mixer); showMixer = true;
+            top.setPanels (showInsp, showMedia, showMixer); resized(); mixer.repaint();
+            return;
+        }
+        auto global = mixer.isShowing() ? mixer.getScreenBounds() : juce::Rectangle<int> (100, 100, 1200, 260);
+        mixerWindow = std::make_unique<MixerWindow>();
+        mixerWindow->setUsingNativeTitleBar (true);
+        removeChildComponent (&mixer);
+        mixer.detached = true; mixer.setVisible (true);
+        mixer.setSize (juce::jmax (900, global.getWidth()), juce::jmax (240, global.getHeight()));
+        mixerWindow->setContentNonOwned (&mixer, true);
+        mixerWindow->setResizable (true, false); mixerWindow->setResizeLimits (600, 200, 8000, 1400);
+        const auto saved = app.engine.getPropertyStorage().getPropertiesFile().getValue ("azMixerWin");
+        if (saved.isEmpty() || ! mixerWindow->restoreWindowStateFromString (saved)) mixerWindow->setTopLeftPosition (global.getX(), juce::jmax (40, global.getY() - 40));
+        mixerWindow->onClose = [this] { juce::MessageManager::callAsync ([this] { if (mixerWindow) toggleMixerWindow(); }); };
+        mixerWindow->setVisible (true); mixerWindow->toFront (true);
+        resized(); repaint();
+        toast (U ("Mikser alohida oynada: istalgan displeyga olib o'ting. Yopsangiz joyiga qaytadi."));
+    }
 
     void editChanged()
     {
@@ -125,10 +247,15 @@ public:
         auto r = getLocalBounds();
         top.setBounds (r.removeFromTop (TopBar::menuH + TopBar::barH));
         status.setBounds (r.removeFromBottom (26));
-        mixer.setVisible (showMixer); inspector.setVisible (showInsp); media.setVisible (showMedia);
-        if (showMixer) mixer.setBounds (r.removeFromBottom (juce::jlimit (180, 236, getHeight() * 3 / 10)));
+        inspector.setVisible (showInsp); media.setVisible (showMedia);
+        if (! mixerWindow)
+        {
+            mixer.setVisible (showMixer);
+            if (showMixer) mixer.setBounds (r.removeFromBottom (juce::jlimit (180, 236, getHeight() * 3 / 10)));
+        }
         if (showInsp) inspector.setBounds (r.removeFromLeft (236));
         if (showMedia) media.setBounds (r.removeFromRight (260));
+        gridBar.setBounds (r.removeFromTop (32));
         auto hdr = r.removeFromLeft (250);
         toolArea = hdr.removeFromTop (56);
         int x = toolArea.getX() + 8; const int y = toolArea.getCentreY() - 13;
@@ -153,6 +280,7 @@ public:
     {
         if (p == 0) showInsp = ! showInsp;
         if (p == 1) showMedia = ! showMedia;
+        if (p == 2 && mixerWindow) { mixerWindow->setVisible (! mixerWindow->isVisible()); if (mixerWindow->isVisible()) mixerWindow->toFront (true); return; }
         if (p == 2) showMixer = ! showMixer;
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
         pf.setValue ("azShowInsp", showInsp); pf.setValue ("azShowMedia", showMedia); pf.setValue ("azShowMixer", showMixer);
@@ -308,6 +436,8 @@ public:
         // F klavishlar (Cubase)
         if (code == KP::F3Key) { togglePanel (2); return true; }
         if (code == KP::F4Key) { showConnections(); return true; }
+        if (code == KP::F7Key) { openDop(); return true; }
+        if (ctrl && alt && code == 'B') { openRender(); return true; }
         if (ctrl && (k.getTextCharacter() == '=' || k.getTextCharacter() == '+' || code == KP::numberPadAdd)) { if (onUiZoom) onUiZoom (1); return true; }
         if (ctrl && (k.getTextCharacter() == '-' || code == KP::numberPadSubtract)) { if (onUiZoom) onUiZoom (-1); return true; }
         if (ctrl && code == '0') { if (onUiZoom) onUiZoom (0); return true; }
@@ -350,6 +480,7 @@ public:
         if (shift && ! ctrl && code == 'H') { zoomTracks (1.25); return true; }
         if (shift && ! ctrl && code == 'G') { zoomTracks (1 / 1.25); return true; }
         if (! shift && plainKey ('b')) { bounce(); return true; }
+        if (! shift && plainKey ('q')) { quantizeSelected(); return true; }
         if (! shift && plainKey ('p')) { locators(); return true; }
         if (! shift && plainKey ('s')) { splitAtCursor(); return true; }
         if (! shift && plainKey ('r')) { toggleRecord(); return true; }
@@ -383,9 +514,10 @@ public:
                     add (18, "Tanlash", "1", vs.tool == 0); add (19, "Qaychi", "2", vs.tool == 1); add (20, "O'chirg'ich", "3", vs.tool == 2); add (21, "Mute", "4", vs.tool == 3); break;
             case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
             case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
-                    add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); break;
+                    add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); m.addSeparator();
+                    add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
-            case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); m.addSeparator();
+            case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); add (66, "Mikserni alohida oynaga ajratish / qaytarish", "", mixerWindow != nullptr); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
             case 6: add (70, "Plagin qo'shish (tanlangan trekka)..."); add (72, "Master insert qo'shish (mastering)..."); add (73, "Control Room insert qo'shish (faqat monitor)..."); add (74, "Monitor Match: monitor o'lchov faylini yuklash (REW)..."); m.addSeparator();
                     add (71, "VST3 plaginlarni skanerlash va boshqarish..."); break;
@@ -440,6 +572,10 @@ public:
                          { if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (auto p = insertPicked (app, *at, it)) p->showWindowExplicitly(); inspector.refresh(); mixer.rebuild(); });
                      } break;
             case 71: showPluginManager(); break;
+            case 44: openDop(); break;
+            case 45: openRender(); break;
+            case 46: quantizeSelected(); break;
+            case 66: toggleMixerWindow(); break;
             case 72: if (! showMixer) togglePanel (2);
                      showPluginPicker (app, localAreaToGlobal (getLocalBounds().withSizeKeepingCentre (10, 10)), [this] (const PickItem& it)
                      { if (auto p = insertMaster (app, it)) p->showWindowExplicitly(); mixer.repaint(); });
@@ -542,6 +678,7 @@ public:
     }
     std::function<void (int)> onUiZoom;
     Lanes& getLanes() { return lanes; }
+    ViewState& getViewState() { return vs; }
     void setUiZoomLabel (float s) { top.uiScale = s; top.repaint(); }
 
     void showPluginManager()
@@ -618,12 +755,15 @@ private:
 
     AppEngine& app;
     ViewState vs;
-    TopBar top; Inspector inspector; TimeRuler ruler; TrackHeaders headers; Lanes lanes; Mixer mixer; MediaBrowser media; StatusBar status;
+    TopBar top; GridBar gridBar; Inspector inspector; TimeRuler ruler; TrackHeaders headers; Lanes lanes; Mixer mixer; MediaBrowser media; StatusBar status;
     juce::TextButton toolAdd, toolSnap, toolBounce;
     juce::OwnedArray<juce::TextButton> tools;
     juce::Rectangle<int> toolArea;
     std::unique_ptr<PianoRollWindow> pianoRoll;
     std::unique_ptr<ConnectionsWindow> connections;
+    std::unique_ptr<DopWindow> dopWindow;
+    std::unique_ptr<RenderWindow> renderWindow;
+    std::unique_ptr<MixerWindow> mixerWindow;
     std::unique_ptr<juce::FileChooser> chooser;
     bool showInsp = true, showMedia = true, showMixer = true, fitted = false;
     int recTick = 0, slow = 0; double lastPos = -1;

@@ -283,6 +283,15 @@ private:
                     if (auto* zh = dynamic_cast<ZoomHost*> (mainWindow->getContentComponent()))
                     {
                         if (args.contains ("--connections")) zh->main.showConnections();
+                        auto selectVocal = [this]
+                        {
+                            for (auto* t : te::getAudioTracks (*app->edit))
+                                for (auto* c : t->getClips())
+                                    if (dynamic_cast<te::WaveAudioClip*> (c) && (t->getName().containsIgnoreCase ("vok") || t->getName().containsIgnoreCase ("voc"))) { app->selection.selectOnly (c); return; }
+                        };
+                        if (args.contains ("--dop")) { selectVocal(); zh->main.openDop(); }
+                        if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
+                        if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
                         if (args.contains ("--picker"))
                             az::showPluginPicker (*app, zh->main.localAreaToGlobal (juce::Rectangle<int> (110, 200, 120, 26)), [] (const az::PickItem&) {});
                     }
