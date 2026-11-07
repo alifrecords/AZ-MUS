@@ -252,8 +252,9 @@ inline void applyProc (const juce::ValueTree& p, juce::AudioBuffer<float>& b, do
 
 inline juce::Range<double> clipRegion (te::WaveAudioClip& c)
 {
-    const double off = c.getPosition().getOffset().inSeconds() * c.getSpeedRatio();
-    return { off, off + c.getPosition().getLength().inSeconds() * c.getSpeedRatio() };
+    // fayl ichidagi oraliq (autoTempo / speed hisobga olinadi)
+    const double a = editToSourceTime (c, c.getPosition().getStart().inSeconds()), b = editToSourceTime (c, c.getPosition().getEnd().inSeconds());
+    return { juce::jmin (a, b), juce::jmax (a, b) };
 }
 
 // AUTO envelope'larni shu klip uchun qayta hisoblash

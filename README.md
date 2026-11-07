@@ -6,6 +6,9 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.9.1: kesilgan klip to'lqini yo'qolmaydi
+BPM/KEY SYNC (yoki pitch/temp) qo'llangan klip kesilganda o'ng bo'lak to'lqini bo'sh ko'rinardi: TE bunday kliplarni klip vaqtidagi "proxy" fayldan chaladi, to'lqin esa asl fayl offset'i bilan chizilardi. Endi to'lqin, qaychi magniti, DOP va Audio Editor proxy/autoTempo'ni to'g'ri hisoblaydi. Ovoz har ikki bo'lakda saqlanganligi test bilan tekshirildi.
+
 ## 0.9.0: Audio Editor — AudioWarp · AZ Pitch (VariAudio/Melodyne uslubi) · Xor · Vokal tozalash
 Audio klipni **2 marta bosing** (yoki tanlab **Enter**) — pastki zonada **EDITOR** ochiladi (MIKSER | EDITOR yorliqlari).
 

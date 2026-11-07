@@ -301,6 +301,17 @@ private:
                         if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
                         if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
                         if (args.contains ("--beat")) zh->main.addBeat();
+                        if (args.contains ("--splitsync"))
+                        {
+                            const auto lf = juce::File ("/tmp/azmus_test/Beat_100bpm.wav");
+                            if (auto* t = app->addAudioTrack ("Split test"))
+                                if (auto c = app->importAudio (*t, lf, te::TimePosition::fromSeconds (2.0)))
+                                {
+                                    zh->main.getMedia().applySync (*c, lf);
+                                    t->splitClip (*c, te::TimePosition::fromSeconds (2.0 + c->getPosition().getLength().inSeconds() / 2));
+                                    app->moveTrackTo (*t, 0);
+                                }
+                        }
                         if (args.contains ("--editor"))
                             for (auto* t : te::getAudioTracks (*app->edit))
                                 if (t->getName().containsIgnoreCase ("voc"))

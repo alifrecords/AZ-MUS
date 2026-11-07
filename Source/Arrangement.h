@@ -319,6 +319,40 @@ private:
     AppEngine& app; ViewState& vs; te::TimePosition dragStart;
 };
 
+// klip ko'rinadigan qismining to'lqin fayli ichidagi vaqt oralig'i.
+// Diqqat: temp/pitch o'zgargan (autoTempo, pitch, speed) kliplar uchun TE "proxy" fayl ijro etadi —
+// u allaqachon klip vaqtida (0 = klip boshi, offset qo'llangan). Oddiy kliplarda — asl fayl (offset + speed).
+inline std::pair<te::TimePosition, te::TimePosition> thumbRange (te::WaveAudioClip& c, double vis1, double vis2)
+{
+    const auto pos = c.getPosition();
+    if (c.usesTimeStretchedProxy())
+        return { te::TimePosition::fromSeconds (vis1 - pos.getStart().inSeconds()), te::TimePosition::fromSeconds (vis2 - pos.getStart().inSeconds()) };
+    const double speed = c.getSpeedRatio();
+    return { te::TimePosition::fromSeconds ((vis1 - pos.getStart().inSeconds() + pos.getOffset().inSeconds()) * speed),
+             te::TimePosition::fromSeconds ((vis2 - pos.getStart().inSeconds() + pos.getOffset().inSeconds()) * speed) };
+}
+// klip vaqti (edit) -> asl fayl vaqti va aksincha (autoTempo'ni ham hisobga oladi)
+inline double editToSourceTime (te::WaveAudioClip& c, double editSec)
+{
+    const auto pos = c.getPosition();
+    if (c.getAutoTempo())
+    {
+        auto& ts = c.edit.tempoSequence;
+        const double beats = ts.toBeats (te::TimePosition::fromSeconds (editSec)).inBeats() - ts.toBeats (pos.getStart()).inBeats() + c.getOffsetInBeats().inBeats();
+        const double bps = c.getLoopInfo().getBeatsPerSecond (c.getAudioFile().getInfo());
+        return bps > 0 ? beats / bps : 0.0;
+    }
+    return (editSec - pos.getStart().inSeconds() + pos.getOffset().inSeconds()) * c.getSpeedRatio();
+}
+inline double sourceToEditTime (te::WaveAudioClip& c, double srcSec)
+{
+    // monoton bog'lanish: ikki nuqta orasida chiziqli (doimiy temp)
+    const double cs = c.getPosition().getStart().inSeconds(), ce = c.getPosition().getEnd().inSeconds();
+    const double a = editToSourceTime (c, cs), b = editToSourceTime (c, ce);
+    if (std::abs (b - a) < 1e-9) return cs;
+    return cs + (srcSec - a) / (b - a) * (ce - cs);
+}
+
 // =============================================================================  Lanes (kliplar)
 class Lanes : public juce::Component, public juce::FileDragAndDropTarget, public juce::DragAndDropTarget
 {
@@ -435,9 +469,7 @@ public:
             const auto pos = wc->getPosition();
             const double vis1 = jmax (vs.startSec, pos.getStart().inSeconds()), vis2 = jmin (vs.xToSec ((float) getWidth()), pos.getEnd().inSeconds());
             if (vis2 <= vis1) return;
-            const double speed = wc->getSpeedRatio();
-            const auto t1 = te::TimePosition::fromSeconds ((vis1 - pos.getStart().inSeconds() + pos.getOffset().inSeconds()) * speed);
-            const auto t2 = te::TimePosition::fromSeconds ((vis2 - pos.getStart().inSeconds() + pos.getOffset().inSeconds()) * speed);
+            const auto [t1, t2] = thumbRange (*wc, vis1, vis2);
             auto area = Rectangle<float> (vs.secToX (vis1), body.getY(), vs.secToX (vis2) - vs.secToX (vis1), body.getHeight()).toNearestInt();
             g.setColour (Colours::white.withAlpha (muted ? 0.25f : 0.85f));
             const float gain = wc->getGain();
@@ -636,14 +668,14 @@ public:
             if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&c))
                 if (auto* ons = onsetsFor (*wc))
                 {
-                    const double speed = juce::jmax (0.01, c.getSpeedRatio());
-                    const double cs = c.getPosition().getStart().inSeconds(), off = c.getPosition().getOffset().inSeconds();
-                    const double ft = (t - cs) * speed + off, tol = 16.0 / vs.pxPerSec * speed;
+                    const double cs = c.getPosition().getStart().inSeconds();
+                    const double ft = editToSourceTime (*wc, t);
+                    const double tol = std::abs (editToSourceTime (*wc, t + 16.0 / vs.pxPerSec) - ft);
                     double best = -1, bd = tol;
                     for (double o : *ons) if (std::abs (o - ft) < bd) { bd = std::abs (o - ft); best = o; }
                     if (best >= 0)
                     {
-                        const double et = cs + (best - off) / speed;
+                        const double et = sourceToEditTime (*wc, best);
                         if (et > cs && et < c.getPosition().getEnd().inSeconds()) return { te::TimePosition::fromSeconds (et), true };
                     }
                 }

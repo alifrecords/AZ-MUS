@@ -276,7 +276,8 @@ public:
         app.edit->getUndoManager().beginNewTransaction ("Hitpoint Quantize");
         // kesish nuqtalari (oxiridan boshlab — kliplar ko'rsatkichlari buzilmasin)
         std::vector<double> cuts;
-        for (double h : hits) { const double et = cs + (h - off); if (et > cs + 0.02 && et < ce - 0.02) cuts.push_back (et); }
+        juce::ignoreUnused (off);
+        for (double h : hits) { const double et = sourceToEditTime (*c, h); if (et > cs + 0.02 && et < ce - 0.02) cuts.push_back (et); }
         juce::Array<te::Clip*> slices; slices.add (c);
         te::Clip* cur = c;
         for (double t : cuts)
@@ -400,7 +401,7 @@ public:
         if (app.edit)
         {
             const double pos = app.edit->getTransport().getPosition().inSeconds();
-            const double ft = (pos - c->getPosition().getStart().inSeconds()) + c->getPosition().getOffset().inSeconds();
+            const double ft = editToSourceTime (*c, pos);
             const float x = timeToX (ft);
             if (x >= a.getX() && x <= a.getRight()) { g.setColour (Colours::white.withAlpha (0.8f)); g.fillRect (x - 0.5f, v.getY(), 1.0f, v.getHeight()); }
         }
@@ -423,14 +424,13 @@ public:
         g.setColour (Colour (0xff7d5cff).withAlpha (0.55f)); g.fillRect (r);
         auto* c = clip(); if (! c || ! app.edit) return;
         auto& ts = app.edit->tempoSequence;
-        const double cs = c->getPosition().getStart().inSeconds(), off = c->getPosition().getOffset().inSeconds();
-        const double t0 = cs + (region.getStart() + scrollSec - off), t1 = t0 + visLen();
+        const double t0 = sourceToEditTime (*c, region.getStart() + scrollSec), t1 = sourceToEditTime (*c, region.getStart() + scrollSec + visLen());
         const double b0 = ts.toBeats (te::TimePosition::fromSeconds (jmax (0.0, t0))).inBeats(), b1 = ts.toBeats (te::TimePosition::fromSeconds (t1)).inBeats();
         const double step = (b1 - b0) > 64 ? 4 : (b1 - b0) > 16 ? 1 : 0.5;
         for (double b = std::ceil (b0 / step) * step; b < b1; b += step)
         {
             const double et = ts.toTime (te::BeatPosition::fromBeats (b)).inSeconds();
-            const float x = timeToX (et - cs + off);
+            const float x = timeToX (editToSourceTime (*c, et));
             const bool bar = std::abs (std::fmod (b, 4.0)) < 1e-6;
             g.setColour (Colours::white.withAlpha (bar ? 0.85f : 0.4f)); g.fillRect (x, r.getY() + (bar ? 2 : 10), 1.0f, bar ? 16.0f : 8.0f);
             if (bar) label (g, String ((int) (b / 4) + 1), { x + 3, r.getY(), 30, 18 }, 9.5f, Colours::white, Justification::centredLeft, 700);

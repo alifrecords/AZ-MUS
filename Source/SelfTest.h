@@ -862,6 +862,49 @@ inline int runSelfTest (const juce::StringArray& args)
         mc11.reset();
     }
 
+    // ================= 0.9.1: kesilgan (temp/pitch moslangan) klip to'lqini va ovozi yo'qolmaydi
+    {
+        auto a13 = std::make_unique<az::AppEngine>(); a13->newProject (dir.getChildFile ("t091.azmus"));
+        auto& e = *a13->edit; e.tempoSequence.getTempo (0)->setBpm (120.0);
+        for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        const auto lf = dir.getChildFile ("Beat_100bpm.wav");
+        { const int sr = 48000, n = sr * 4; juce::AudioBuffer<float> b (2, n); juce::Random r (3);
+          for (int i = 0; i < n; ++i) { const float v = 0.4f * std::sin ((float) (juce::MathConstants<double>::twoPi * 330.0 * i / sr)) * (0.5f + 0.5f * std::sin ((float) (juce::MathConstants<double>::twoPi * 1.6 * i / sr))); b.setSample (0, i, v); b.setSample (1, i, v); }
+          juce::WavAudioFormat wav; lf.deleteFile(); if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (lf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n); }
+        auto* t = a13->addAudioTrack ("Loop");
+        auto c = a13->importAudio (*t, lf, te::TimePosition());
+        auto mc13 = std::make_unique<az::MainComponent> (*a13);
+        mc13->getMedia().applySync (*c, lf);          // BPM SYNC: 100 -> 120 (autoTempo => proxy)
+        const double cs = c->getPosition().getStart().inSeconds(), ce = c->getPosition().getEnd().inSeconds();
+        std::printf ("       sinxron klip: %.3f-%.3f s, proxy=%d\n", cs, ce, (int) c->usesTimeStretchedProxy());
+        auto* right = dynamic_cast<te::WaveAudioClip*> (t->splitClip (*c, te::TimePosition::fromSeconds ((cs + ce) / 2)));
+        check (right != nullptr && c->usesTimeStretchedProxy(), "Sinxron (autoTempo) klip o'rtasidan kesildi");
+        if (right)
+        {
+            const double rs = right->getPosition().getStart().inSeconds(), re = right->getPosition().getEnd().inSeconds();
+            auto [t1, t2] = az::thumbRange (*right, rs, re);
+            const double src0 = az::editToSourceTime (*right, rs), src1 = az::editToSourceTime (*right, re);
+            std::printf ("       o'ng bo'lak: to'lqin oralig'i %.3f-%.3f, asl faylda %.3f-%.3f s\n", t1.inSeconds(), t2.inSeconds(), src0, src1);
+            check (std::abs (t1.inSeconds()) < 1e-6 && std::abs (t2.inSeconds() - (re - rs)) < 1e-6 && std::abs (src0 - 2.0) < 0.02 && std::abs (src1 - 4.0) < 0.02,
+                   "Kesilgan bo'lak to'lqini to'g'ri joydan chiziladi (proxy: klip boshidan, asl fayl: 2-4 s)");
+            // ovoz: faqat o'ng bo'lak
+            c->setMuted (true);
+            const auto of = dir.getChildFile ("split_right.wav"); a13->exportWav (of, 32);
+            juce::AudioBuffer<float> b; double sr; az::dop::readFile (a13->engine, of, b, sr);
+            const float rmsR = b.getNumSamples() > 0 ? juce::Decibels::gainToDecibels (b.getRMSLevel (0, (int) (rs * sr), (int) ((re - rs) * sr * 0.9)), -200.0f) : -200.0f;
+            // taqqoslash: kesilmagan holat (shu oraliqda)
+            c->setMuted (false); right->setMuted (true);
+            const auto ol = dir.getChildFile ("split_left.wav"); a13->exportWav (ol, 32);
+            juce::AudioBuffer<float> bl; az::dop::readFile (a13->engine, ol, bl, sr);
+            const float rmsL = juce::Decibels::gainToDecibels (bl.getRMSLevel (0, (int) (cs * sr), (int) ((rs - cs) * sr * 0.9)), -200.0f);
+            int silent = 0; const int blk = (int) (sr * 0.05);
+            for (int q = (int) (rs * sr); q + blk < (int) (re * sr * 0.98); q += blk) if (b.getMagnitude (0, q, blk) < 0.002f) ++silent;
+            std::printf ("       ovoz: chap %.1f dB, o'ng %.1f dB RMS, o'ngda jim 50ms bloklar: %d\n", rmsL, rmsR, silent);
+            check (rmsR > rmsL - 3 && silent == 0, "Kesilgan bo'lak ovozi yo'qolmagan (chap bo'lak bilan bir xil darajada)");
+        }
+        mc13.reset();
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;
