@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.14.0: Har trek uchun AZ EQ (Crossover) va AZ Imager — Ozone uslubida, Inspektorda
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| AZ EQ · Crossover | Inspektor tepasida: 6 polosali parametrik EQ (Low cut / Low shelf / Bell / High shelf / High cut) + jonli spektr. Nuqtani sudrash: chastota va dB; g'ildirak: Q; ikki marta bosish: 0 dB / yoqish-o'chirish; o'ng tugma: tur. Imager crossover chiziqlari (1, 2, 3) shu yerda ham sudraladi |
+| AZ Imager | Inspektor pastida: 4 polosali stereo kenglik (−100 mono · 0 asl · +100 keng), crossover chastotalari, Stereoize; vektorskop: Polar Sample / Polar Level / Lissajous; korrelyatsiya o'lchagichi |
+| Har trekda alohida | Har bir trekning o'z EQ va Imager'i bor; standart holatda ovozga tegmaydi; insert ro'yxatini egallamaydi |
+| Katta oyna | ⤢ tugmasi — EQ (760×360) va Imager (460×520) katta oynada |
+| Inspektor | Sig'masa g'ildirak bilan aylantiriladi |
+
 ## 0.13.0: Ikkinchi mavzu (Indigo) · bo'rtma 3D transport paneli
 
 | Bo'lim | Nima qilindi |

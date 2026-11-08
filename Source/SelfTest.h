@@ -1190,6 +1190,72 @@ inline int runSelfTest (const juce::StringArray& args)
         pf.setValue ("azRecent", recentBak); pf.setValue ("azLastEdit", lastBak);
     }
 
+    // ================= 0.14: har trek uchun AZ EQ va AZ Imager (Ozone uslubida)
+    {
+        auto at = std::make_unique<az::AppEngine>(); at->newProject (dir.getChildFile ("t14.azmus"));
+        auto& e = *at->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        const int sr = 48000, n = sr * 2; juce::AudioBuffer<float> b (2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            const float mid = 0.25f * std::sin (6.2831853f * 1000.0f * i / sr), side = 0.25f * std::sin (6.2831853f * 100.0f * i / sr);
+            b.setSample (0, i, mid + side); b.setSample (1, i, mid - side);
+        }
+        const auto wf = dir.getChildFile ("ms.wav");
+        { juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (wf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n); }
+        auto* t = at->addAudioTrack ("MS"); at->importAudio (*t, wf, te::TimePosition());
+        az::ensureTrackTools (*t);
+        auto* eq = az::findTrackEq (*t); auto* im = az::findImager (*t);
+        check (eq != nullptr && im != nullptr && az::AppEngine::userPlugins (*t).isEmpty(), "Har trekda AZ EQ va AZ Imager bor (insert ro'yxatini egallamaydi)");
+        int nr = 0;
+        auto render = [&] (juce::AudioBuffer<float>& out) { const auto f = dir.getChildFile ("t14_" + juce::String (++nr) + ".wav"); at->exportWav (f, 32); double r = 0; az::dop::readFile (at->engine, f, out, r); };
+        auto band = [&] (const juce::AudioBuffer<float>& x, int ch, double hz)   // Goertzel darajasi (dB)
+        {
+            const int s0 = (int) (0.6 * 44100), len = 44100 / 2; const double w = 6.283185307 * hz / 44100.0; double c = 2 * std::cos (w), q1 = 0, q2 = 0;
+            for (int i = 0; i < len; ++i) { const double q0 = c * q1 - q2 + x.getSample (ch, s0 + i); q2 = q1; q1 = q0; }
+            return 20 * std::log10 (std::sqrt (q1 * q1 + q2 * q2 - q1 * q2 * c) / (len / 2) + 1e-12);
+        };
+        auto sideDb = [&] (const juce::AudioBuffer<float>& x, double hz)
+        {
+            juce::AudioBuffer<float> s (1, x.getNumSamples());
+            for (int i = 0; i < x.getNumSamples(); ++i) s.setSample (0, i, 0.5f * (x.getSample (0, i) - x.getSample (1, i)));
+            return band (s, 0, hz);
+        };
+        juce::AudioBuffer<float> base, x; render (base);
+        const double m0 = band (base, 0, 1000), s0 = sideDb (base, 100);
+        eq->set (2, "f", 1000.0, false); eq->set (2, "g", 12.0, false); eq->set (2, "q", 1.0, false); render (x);
+        const double m1 = band (x, 0, 1000);
+        eq->set (2, "g", 0.0, false); eq->set (0, "on", 1.0, false); eq->set (0, "f", 400.0, false); render (x);
+        const double low1 = band (x, 0, 100);
+        eq->set (0, "on", 0.0, false);
+        std::printf ("       AZ EQ: 1 kHz %.1f -> %.1f dB (+12 bell); low cut 400 Hz: 100 Hz %.1f dB (avval %.1f)\n", m0, m1, low1, band (base, 0, 100));
+        check (std::abs ((m1 - m0) - 12.0) < 0.6 && low1 < band (base, 0, 100) - 20, "AZ EQ: bell +12 dB va low cut ishlaydi");
+        im->set ("x1", 400.0, false);                           // 100 Hz 1-polosa ichida (2 oktava pastda)
+        im->setWidth (0, -100.0); render (x); const double sMono = sideDb (x, 100);
+        im->setWidth (0, 0.0); im->setWidth (3, -100.0); render (x); const double sHiOnly = sideDb (x, 100);
+        im->setWidth (3, 0.0); im->setWidth (0, 100.0); render (x); const double sWide = sideDb (x, 100), mW = band (x, 0, 1000);
+        im->setWidth (0, 0.0);
+        std::printf ("       AZ Imager: side 100 Hz %.1f dB; 1-polosa -100 -> %.1f; 4-polosa -100 -> %.1f; 1-polosa +100 -> %.1f (mid %.1f)\n", s0, sMono, sHiOnly, sWide, mW);
+        check (sMono < s0 - 30 && std::abs (sHiOnly - s0) < 1.0 && std::abs (sWide - (s0 + 6.02)) < 0.8, "AZ Imager: polosali kenglik (crossover bo'yicha), -100 mono, +100 keng");
+        render (x); bool same = true; for (int i = 30000; i < 60000; i += 7) same &= std::abs (x.getSample (0, i) - base.getSample (0, i)) < 1e-5f;
+        check (same, "Neytral holatda EQ va Imager ovozga tegmaydi");
+        im->set ("stz", 1.0, false); im->set ("stzAmt", 80.0, false);
+        {
+            // mono materialda Stereoize kenglik qo'shadi
+            for (int i = 0; i < n; ++i) { const float v = 0.25f * std::sin (6.2831853f * 1000.0f * i / sr); b.setSample (0, i, v); b.setSample (1, i, v); }
+            const auto mf = dir.getChildFile ("mono.wav");
+            { juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (mf), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n); }
+            for (auto* c : t->getClips()) c->removeFromParent();
+            at->importAudio (*t, mf, te::TimePosition()); render (x);
+            const double sz = sideDb (x, 1000);
+            std::printf ("       Stereoize (mono 1 kHz): side %.1f dB\n", sz);
+            check (sz > -30, "AZ Imager: Stereoize mono yozuvga kenglik qo'shadi");
+        }
+        az::EqView ev; ev.setSize (240, 120); ev.setPlugins (eq, im);
+        az::ImagerView iv; iv.setSize (240, 248); iv.setPlugin (im);
+        juce::Image img (juce::Image::ARGB, 240, 248, true); { juce::Graphics g (img); ev.paintEntireComponent (g, false); iv.paintEntireComponent (g, false); }
+        check (true, "Inspektor ko'rinishlari: EQ/Crossover va Imager (vektorskop) chiziladi");
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

@@ -491,7 +491,7 @@ public:
     {
         return dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr
             && dynamic_cast<te::AuxSendPlugin*> (p) == nullptr && dynamic_cast<te::AuxReturnPlugin*> (p) == nullptr
-            && p->getPluginType() != "azscope";
+            && p->getPluginType() != "azscope" && p->getPluginType() != "azeq" && p->getPluginType() != "azimager";
     }
     // treklarni qayta tartiblash: audio treklar ro'yxatida `target` joyiga (0..n)
     bool moveTrackTo (te::AudioTrack& t, int target)

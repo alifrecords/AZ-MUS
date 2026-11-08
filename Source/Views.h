@@ -518,6 +518,7 @@ public:
         vol.onValueChange = [this] { if (auto* t = track()) t->getVolumePlugin()->setVolumeDb ((float) vol.getValue()); repaint(); };
         pan.onValueChange = [this] { if (auto* t = track()) t->getVolumePlugin()->setPan ((float) pan.getValue()); repaint(); };
         addAndMakeVisible (input); input.onChange = [this] { applyInput(); };
+        addAndMakeVisible (eqView); addAndMakeVisible (imagerView);
         startTimerHz (4);
     }
     te::AudioTrack* track() const { return app.edit ? findTrack (*app.edit, vs.selectedTrack) : nullptr; }
@@ -525,6 +526,10 @@ public:
     void refresh()
     {
         auto* t = track();
+        if (t != nullptr) ensureTrackTools (*t);           // har trekda o'z AZ EQ va AZ Imager'i
+        eqView.setPlugins (t ? findTrackEq (*t) : nullptr, t ? findImager (*t) : nullptr);
+        imagerView.setPlugin (t ? findImager (*t) : nullptr);
+        eqView.setVisible (t != nullptr); imagerView.setVisible (t != nullptr);
         if (t) { vol.setValue (t->getVolumePlugin()->getVolumeDb(), juce::dontSendNotification); pan.setValue (t->getVolumePlugin()->getPan(), juce::dontSendNotification); }
         input.clear (juce::dontSendNotification);
         if (t && ! AppEngine::isInstrumentTrack (*t))
@@ -557,14 +562,27 @@ public:
         app.edit->restartPlayback();
     }
 
-    int sendsTop() const { return 112 + 32 * slotCount() + 12; }
+    static constexpr int eqH = 128, imagerH = 258;
+    int sendsTop() const { return eqH + 112 + 32 * slotCount() + 12; }
+    int imagerTop() const { return channelTop() + 184; }
+    int contentHeight() const { return imagerTop() + imagerH + 12; }
     int channelTop() const { auto* t = track(); return sendsTop() + 22 + 26 * ((t ? Routing::sends (*t).size() : 0) + 1) + 18; }
 
     void resized() override
     {
-        const int y = channelTop();
+        scrollY = juce::jlimit (0, juce::jmax (0, contentHeight() - getHeight()), scrollY);
+        const int y = channelTop() - scrollY;
         vol.setBounds (18, y + 20, 56, 56); pan.setBounds (88, y + 20, 56, 56);
         input.setBounds (12, y + 128, getWidth() - 24, 28);
+        eqView.setBounds (8, 76 - scrollY, getWidth() - 16, eqH - 8);
+        imagerView.setBounds (8, imagerTop() - scrollY, getWidth() - 16, imagerH);
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const int maxS = juce::jmax (0, contentHeight() - getHeight());
+        if (maxS == 0) { Component::mouseWheelMove (e, w); return; }
+        scrollY = juce::jlimit (0, maxS, scrollY - juce::roundToInt (w.deltaY * 160.0f));
+        resized(); repaint();
     }
     int slotCount() const { auto* t = track(); return t ? AppEngine::userPlugins (*t).size() + 1 : 0; }
 
@@ -573,6 +591,12 @@ public:
         using namespace juce;
         g.fillAll (bg1);
         g.setColour (line); g.drawVerticalLine (getWidth() - 1, 0, (float) getHeight());
+        if (const int maxS = jmax (0, contentHeight() - getHeight()); maxS > 0)
+        {   // aylantirish chizig'i
+            const float h = (float) getHeight() * getHeight() / contentHeight(), y = (float) scrollY / maxS * (getHeight() - h);
+            g.setColour (Colours::white.withAlpha (0.12f)); g.fillRoundedRectangle ((float) getWidth() - 5, y, 3, h, 1.5f);
+        }
+        g.setOrigin (0, -scrollY);
         caps (g, "INSPEKTOR", { 14, 12, 200, 12 });
         auto* t = track();
         if (! t) { label (g, U ("Trek tanlang"), { 14, 40, 200, 20 }, 12, dim); return; }
@@ -583,12 +607,12 @@ public:
         label (g, t->getName(), nr.withTrimmedLeft (26).withTrimmedRight (70), 13, text, Justification::centredLeft, 700);
         caps (g, AppEngine::isInstrumentTrack (*t) ? "INSTR" : "AUDIO", nr.withTrimmedRight (10), 9, dim, Justification::centredRight);
 
-        caps (g, "INSERTLAR", { 14, 84, 200, 12 });
+        caps (g, "INSERTLAR", { 14, (float) eqH + 84, 200, 12 });
         auto plugs = AppEngine::userPlugins (*t);
         slots.clear();
         for (int i = 0; i <= plugs.size(); ++i)
         {
-            auto r = Rectangle<float> (12, 104.0f + (float) i * 32, (float) getWidth() - 24, 28);
+            auto r = Rectangle<float> (12, (float) eqH + 104.0f + (float) i * 32, (float) getWidth() - 24, 28);
             slots.add (r);
             if (i == plugs.size()) { panel (g, r, 7, 0.015f, 0.06f); label (g, U ("+  Plagin qo'shish"), r.reduced (12, 0), 11.5f, dim, Justification::centredLeft, 500); break; }
             auto* p = plugs[i];
@@ -627,10 +651,12 @@ public:
         label (g, std::abs (pv) < 0.01 ? String ("C") : (pv < 0 ? "L" : "R") + String (roundToInt (std::abs (pv) * 100)), { 150, y + 48, 80, 14 }, 12, dim, Justification::centredLeft, 500);
         if (input.isVisible()) caps (g, "AUDIO KIRISH", { 14, y + 110, 200, 12 });
         else label (g, U ("MIDI: barcha klaviaturalar \xe2\x86\x92 shu trek"), { 14, y + 110, (float) getWidth() - 20, 14 }, 10.5f, dim);
+        caps (g, U ("STEREO IMAGER"), { 14, (float) imagerTop() - 16, 200, 12 });
     }
 
-    void mouseDown (const juce::MouseEvent& e) override
+    void mouseDown (const juce::MouseEvent& ev) override
     {
+        const auto e = ev.withNewPosition (ev.position.translated (0, (float) scrollY));
         auto* t = track(); if (! t) return;
         dragSend = nullptr;
         auto ss = Routing::sends (*t);
@@ -655,7 +681,7 @@ public:
                 if (i == plugs.size())
                 {
                     te::Track::Ptr tp (t);
-                    showPluginPicker (app, localAreaToGlobal (slots[i].toNearestInt()), [this, tp] (const PickItem& it)
+                    showPluginPicker (app, localAreaToGlobal (slots[i].translated (0, (float) -scrollY).toNearestInt()), [this, tp] (const PickItem& it)
                     {
                         if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get()))
                             if (auto p = insertPicked (app, *at, it)) p->showWindowExplicitly();
@@ -688,8 +714,9 @@ public:
         dragSend->setGainDb (juce::jlimit (-60.0f, 6.0f, dragStartDb + (float) e.getDistanceFromDragStartX() * 0.25f));
         repaint();
     }
-    void mouseDoubleClick (const juce::MouseEvent& e) override
+    void mouseDoubleClick (const juce::MouseEvent& ev) override
     {
+        const auto e = ev.withNewPosition (ev.position.translated (0, (float) scrollY));
         if (auto* t = track()) { auto ss = Routing::sends (*t); for (int i = 0; i < juce::jmin (ss.size(), sendRows.size()); ++i) if (sendRows[i].contains (e.position)) { ss[i]->setGainDb (-10.0f); repaint(); } }
     }
     void showSendMenu (te::AudioTrack& t)
@@ -739,6 +766,7 @@ private:
     juce::Array<juce::Rectangle<float>> sendRows;
     AppEngine& app; ViewState& vs;
     juce::Slider vol, pan; juce::ComboBox input;
+    EqView eqView { true }; ImagerView imagerView { true }; int scrollY = 0;
     juce::Array<juce::Rectangle<float>> slots; int lastSlots = -1;
 };
 
