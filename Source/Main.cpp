@@ -301,6 +301,18 @@ private:
                         if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
                         if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
                         if (args.contains ("--beat")) zh->main.addBeat();
+                        if (args.contains ("--beatlane"))
+                            juce::Timer::callAfterDelay (1500, []
+                            {
+                                std::function<az::BeatEditor* (juce::Component*)> find = [&] (juce::Component* c) -> az::BeatEditor*
+                                {
+                                    if (auto* be = dynamic_cast<az::BeatEditor*> (c)) return be;
+                                    for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r;
+                                    return nullptr;
+                                };
+                                for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
+                                    if (auto* be = find (juce::Desktop::getInstance().getComponent (i))) be->demoLanes();
+                            });
                         if (args.contains ("--splitsync"))
                         {
                             const auto lf = juce::File ("/tmp/azmus_test/Beat_100bpm.wav");

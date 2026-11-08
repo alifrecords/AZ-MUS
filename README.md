@@ -6,6 +6,18 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.10.0: AZ BEAT — 20 pad · Nerve lane'lari · Battery Buses / Pitch Envelope / Filter-EQ
+
+| Bo'lim | Nima qo'shildi |
+|---|---|
+| Padlar | 16 emas, 20 pad (4×5, MIDI C1–G2); yangi tovushlar: Conga, Cowbell, Tambourine, FX Zap |
+| Nerve lane'lari | velocity · cutoff · resonance · pitch · pan · gate · late · fx send — har step uchun katta ustunli muharrir (chizib sudrash, g'ildirak, ikki marta bosish = standart, Alt = lane'ni tiklash) |
+| Playhead | Sample to'lqinida ovoz hozir qayerda ketayotgani oq chiziq bilan ko'rsatiladi |
+| Buses | Bus 1–4, FX (reverb) qaytishi va Master faderlari, metrlar; har pad uchun "Out: Master / Bus 1–4" |
+| Pitch Envelope | Amount (±48 st), Decay 1, Break, Decay 2 + egri chiziq |
+| Filter / EQ | Off / Lowpass / Hipass / Bandpass, 1P / 2P / 4P (6/12/24 dB/okt), Cutoff, Reso, Gain + xarakteristika grafigi |
+| Sichqoncha g'ildiragi | Barcha knob va faderlar; stepda velocity, lane'da qiymat, padda gain (Shift — mayda qadam) |
+
 ## 0.9.1: kesilgan klip to'lqini yo'qolmaydi
 BPM/KEY SYNC (yoki pitch/temp) qo'llangan klip kesilganda o'ng bo'lak to'lqini bo'sh ko'rinardi: TE bunday kliplarni klip vaqtidagi "proxy" fayldan chaladi, to'lqin esa asl fayl offset'i bilan chizilardi. Endi to'lqin, qaychi magniti, DOP va Audio Editor proxy/autoTempo'ni to'g'ri hisoblaydi. Ovoz har ikki bo'lakda saqlanganligi test bilan tekshirildi.
 

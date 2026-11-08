@@ -1,11 +1,12 @@
 // =============================================================================
 //  AZ MUS — AZ BEAT: beat yaratish treki
-//  · Battery tuzilmasi: 4×4 = 16 pad (C1–D#2), har padda sample, gain/pan/tune, start/end, attack/decay,
+//  · Battery tuzilmasi: 4×5 = 20 pad (C1–G2), har padda sample, gain/pan/tune, start/end, attack/decay,
 //    reverse, choke guruhi, mute/solo, temp bilan sinxron loop
 //  · Xfer Nerve mexanizmi: har pad uchun step-sekvenser (velocity, ratchet), swing, uzunlik 16/32/64,
-//    loopni transient bo'yicha 16 padga bo'lish (Slice) + patternni avtomatik yozish, Pattern → MIDI
+//    loopni transient bo'yicha 20 padga bo'lish (Slice) + patternni avtomatik yozish, Pattern → MIDI
 // =============================================================================
 #pragma once
+#include <complex>
 #include "SampleSync.h"
 #include "Theme.h"
 
@@ -13,7 +14,12 @@ namespace az
 {
 namespace beat
 {
-constexpr int numPads = 16, maxSteps = 64, firstNote = 36;
+constexpr int numPads = 20, maxSteps = 64, firstNote = 36, numBuses = 4, numLanes = 7;
+// Nerve kabi step-lane'lar (velocity alohida — "steps"): har step uchun 0..127
+inline const char* laneIds[]   = { "l_cut", "l_res", "l_pitch", "l_pan", "l_gate", "l_late", "l_fx" };
+inline const char* laneNames[] = { "cutoff", "resonance", "pitch", "pan", "gate", "late", "fx send" };
+inline const int   laneDef[]   = { 127, 0, 64, 64, 127, 0, 0 };
+enum Lane { laneCut = 0, laneRes, lanePitch, lanePan, laneGate, laneLate, laneFx };
 inline const juce::Identifier PAD ("PAD");
 inline const char* rateNames[] = { "1/16", "1/8", "1/32", "1/16T" };
 inline double rateBeats (int r) { return r == 1 ? 0.5 : r == 2 ? 0.125 : r == 3 ? 0.25 * 2.0 / 3.0 : 0.25; }
@@ -23,12 +29,18 @@ struct PadRT
     std::shared_ptr<const juce::AudioBuffer<float>> sample; double sampleRate = 48000;
     float gain = 1, pan = 0, tune = 0, start = 0, end = 1, attackMs = 0, decayMs = 30, delayMs = 0;
     bool reverse = false, mute = false, solo = false; int choke = 0;
+    // Battery: pitch envelope va filtr/EQ, chiqish shinasi
+    float peAmt = 0, peD1 = 60, peBrk = 0.3f, peD2 = 300;
+    int fType = 0, fSlope = 1; float fCut = 20000, fRes = 0.1f, fGain = 0;   // fType: 0 o'chiq, 1 LP, 2 HP, 3 BP; fSlope: 0=1P,1=2P,2=4P
+    int bus = 0;                                                                // 0 = Master, 1..4 = Bus
     juce::uint8 steps[maxSteps] {}, ratchet[maxSteps] {};
+    juce::uint8 lane[numLanes][maxSteps] {};
 };
 struct Snapshot
 {
     PadRT pads[numPads];
     bool seqOn = true, anySolo = false; int length = 16, rate = 0; float swing = 0, master = 1;
+    float busGain[numBuses] { 1, 1, 1, 1 }, fxReturn = 0.35f;
 };
 
 // ---------------------------------------------------------------- standart kit (sintez qilingan, birinchi ishga tushishda)
@@ -40,7 +52,8 @@ inline juce::Array<juce::File> ensureDefaultKit()
 {
     auto dir = defaultKitFolder(); dir.createDirectory();
     const char* names[] = { "Kick", "Snare", "Clap", "Closed Hat", "Open Hat", "Rim", "Tom Low", "Tom High",
-                            "808", "Shaker", "Crash", "Perc", "Snap", "Kick 2", "Snare 2", "Ride" };
+                            "808", "Shaker", "Crash", "Perc", "Snap", "Kick 2", "Snare 2", "Ride",
+                            "Conga", "Cowbell", "Tambourine", "FX Zap" };
     juce::Array<juce::File> files;
     juce::Random rnd (7);
     for (int p = 0; p < numPads; ++p)
@@ -48,7 +61,7 @@ inline juce::Array<juce::File> ensureDefaultKit()
         auto f = dir.getChildFile (juce::String (p + 1).paddedLeft ('0', 2) + " " + names[p] + ".wav");
         files.add (f);
         if (f.existsAsFile()) continue;
-        const int sr = 48000; const double dur = p == 4 || p == 10 || p == 15 ? 1.1 : p == 8 ? 1.4 : 0.6;
+        const int sr = 48000; const double dur = p == 4 || p == 10 || p == 15 ? 1.1 : p == 8 ? 1.4 : p == 19 ? 0.9 : 0.6;
         const int n = (int) (dur * sr);
         juce::AudioBuffer<float> b (2, n); b.clear();
         double ph = 0; float lp = 0, hp = 0, prev = 0;
@@ -73,6 +86,11 @@ inline juce::Array<juce::File> ensureDefaultKit()
                 case 11: { ph += 520.0 / sr; v = 0.6f * (float) (std::sin (juce::MathConstants<double>::twoPi * ph + 2 * std::sin (juce::MathConstants<double>::twoPi * 760 * t)) * std::exp (-t * 40)); break; }
                 case 12: v = 0.8f * hp * (float) std::exp (-t * 90); break;
                 case 15: { ph += 3200.0 / sr; v = 0.2f * (float) std::sin (juce::MathConstants<double>::twoPi * ph) * (float) std::exp (-t * 4) + 0.25f * hp * (float) std::exp (-t * 6); break; }
+                case 16: { const double f = 210 * (1 + 0.25 * std::exp (-t * 40)); ph += f / sr; v = 0.75f * (float) (std::sin (juce::MathConstants<double>::twoPi * ph) * std::exp (-t * 14)); break; }   // conga
+                case 17: { const double a1 = std::fmod (t * 540, 1.0) < 0.5 ? 1 : -1, a2 = std::fmod (t * 800, 1.0) < 0.5 ? 1 : -1; v = 0.22f * (float) ((a1 + a2) * std::exp (-t * 12)); break; }   // cowbell
+                case 18: v = 0.5f * hp * (float) (std::exp (-std::fmod (t, 0.045) * 70) * std::exp (-t * 7)); break;   // tambourine
+                case 19: { const double f = 2400 * std::exp (-t * 7) + 60; ph += f / sr; v = 0.5f * (float) (std::sin (juce::MathConstants<double>::twoPi * ph) * std::exp (-t * 4)); break; }   // zap
+
                 default: break;
             }
             v = juce::jlimit (-1.0f, 1.0f, v * 0.9f);
@@ -123,7 +141,7 @@ public:
 
     explicit AzBeatPlugin (te::PluginCreationInfo info) : te::Plugin (info)
     {
-        for (int i = 0; i < beat::numPads; ++i) pad (i);
+        for (int i = 0; i < beat::numPads; ++i) { pad (i); padPos[i] = -1.0f; }
         if (! state.hasProperty ("seqOn")) { state.setProperty ("seqOn", true, nullptr); state.setProperty ("length", 16, nullptr); state.setProperty ("rate", 0, nullptr);
                                              state.setProperty ("swing", 0.0, nullptr); state.setProperty ("master", 0.0, nullptr); }
         rebuildAll();
@@ -143,7 +161,13 @@ public:
     BusLayout getBusses() const override                  { return BusLayout::singleStereoInOut(); }
     std::unique_ptr<EditorComponent> createEditor() override;
 
-    void initialise (const te::PluginInitialisationInfo& info) override { outRate = info.sampleRate > 0 ? info.sampleRate : 48000.0; for (auto& v : voices) v.active = false; }
+    void initialise (const te::PluginInitialisationInfo& info) override
+    {
+        outRate = info.sampleRate > 0 ? info.sampleRate : 48000.0; for (auto& v : voices) v.active = false;
+        busBuf.setSize (12, juce::jmax (8192, info.blockSizeSamples * 2), false, false, true);
+        reverb.setSampleRate (outRate);
+        juce::Reverb::Parameters rp; rp.roomSize = 0.62f; rp.damping = 0.45f; rp.wetLevel = 1.0f; rp.dryLevel = 0.0f; rp.width = 1.0f; reverb.setParameters (rp); reverb.reset();
+    }
     void deinitialise() override {}
     void reset() override { for (auto& v : voices) v.active = false; }
 
@@ -157,6 +181,9 @@ public:
             p.setProperty (k, v, nullptr);
         for (auto k : { "reverse", "mute", "solo", "sync", "norm" }) p.setProperty (k, false, nullptr);
         p.setProperty ("choke", 0, nullptr);
+        for (auto [k, v] : std::initializer_list<std::pair<const char*, double>> { { "pe_amt", 0 }, { "pe_d1", 60 }, { "pe_brk", 0.3 }, { "pe_d2", 300 },
+                                                                                    { "f_type", 0 }, { "f_slope", 1 }, { "f_cut", 20000 }, { "f_res", 0.1 }, { "f_gain", 0 }, { "bus", 0 } })
+            p.setProperty (k, v, nullptr);
         p.setProperty ("steps", juce::String::repeatedString ("0,", beat::maxSteps), nullptr);
         p.setProperty ("ratchet", juce::String::repeatedString ("1,", beat::maxSteps), nullptr);
         state.addChild (p, -1, nullptr);
@@ -176,6 +203,13 @@ public:
     }
     int stepRatchet (int p, int s) { return juce::jlimit (1, 4, intList (pad (p)["ratchet"], 1)[s]); }
     void setRatchet (int p, int s, int r) { auto a = intList (pad (p)["ratchet"], 1); a.set (s, juce::jlimit (1, 4, r)); pad (p).setProperty ("ratchet", listString (a), nullptr); }
+    int laneVal (int p, int lane, int s) { auto v = pad (p)[beat::laneIds[lane]]; return v.isVoid() ? beat::laneDef[lane] : juce::jlimit (0, 127, intList (v, beat::laneDef[lane])[s]); }
+    void setLane (int p, int lane, int s, int val, juce::UndoManager* u = nullptr)
+    {
+        auto pv = pad (p); auto cur = pv[beat::laneIds[lane]];
+        auto a = cur.isVoid() ? intList ({}, beat::laneDef[lane]) : intList (cur, beat::laneDef[lane]);
+        a.set (s, juce::jlimit (0, 127, val)); pv.setProperty (beat::laneIds[lane], listString (a), u);
+    }
     int length() const   { return juce::jlimit (1, beat::maxSteps, (int) state["length"]); }
     juce::UndoManager* um() { return getUndoManager(); }
 
@@ -278,7 +312,7 @@ public:
             const double b0 = fc.editTime.getStart().inSeconds() * bpm / 60.0, b1 = fc.editTime.getEnd().inSeconds() * bpm / 60.0;
             const double rb = beat::rateBeats (sn->rate);
             const int L = sn->length;
-            const double maxShift = 0.25 * bpm / 60.0;          // delay: +-250 ms
+            const double maxShift = 0.25 * bpm / 60.0 + beat::rateBeats (sn->rate);   // delay +-250 ms + late
             if (b1 > b0)
             {
                 for (long k = (long) std::floor ((b0 - maxShift) / rb) - 1; ; ++k)
@@ -295,9 +329,10 @@ public:
                         const int rat = juce::jmax (1, (int) sn->pads[p].ratchet[idx]);
                         for (int r = 0; r < rat; ++r)
                         {
-                            const double at = base + swing + r * rb / rat + sn->pads[p].delayMs * 0.001 * bpm / 60.0;
+                            const double late = sn->pads[p].lane[beat::laneLate][idx] / 127.0 * rb * 0.5;   // Nerve "late": step'ning yarmigacha
+                            const double at = base + swing + late + r * rb / rat + sn->pads[p].delayMs * 0.001 * bpm / 60.0;
                             if (at < b0 || at >= b1) continue;
-                            trigger (*sn, p, juce::jmax (1, vel - r * 12), juce::jlimit (0, n - 1, (int) ((at - b0) * 60.0 / bpm * outRate)));
+                            trigger (*sn, p, juce::jmax (1, vel - r * 12), juce::jlimit (0, n - 1, (int) ((at - b0) * 60.0 / bpm * outRate)), idx, rb * 60.0 / bpm);
                         }
                     }
                     if (base >= b0 && base < b1) playStep = idx;
@@ -367,6 +402,8 @@ private:
         s->seqOn = state["seqOn"]; s->length = length(); s->rate = juce::jlimit (0, 3, (int) state["rate"]);
         s->swing = juce::jlimit (0.0f, 0.75f, (float) (double) state["swing"]);
         s->master = juce::Decibels::decibelsToGain ((float) (double) state["master"]);
+        for (int b = 0; b < beat::numBuses; ++b) s->busGain[b] = juce::Decibels::decibelsToGain ((float) (double) state.getProperty ("bus" + juce::String (b + 1), 0.0), -80.0f);
+        s->fxReturn = juce::Decibels::decibelsToGain ((float) (double) state.getProperty ("fxReturn", -6.0), -80.0f);
         for (int i = 0; i < beat::numPads; ++i)
         {
             auto v = pad (i); auto& p = s->pads[i];
@@ -411,19 +448,55 @@ private:
             s->anySolo |= p.solo;
             auto st = intList (v["steps"], 0), ra = intList (v["ratchet"], 1);
             for (int k = 0; k < beat::maxSteps; ++k) { p.steps[k] = (juce::uint8) juce::jlimit (0, 127, st[k]); p.ratchet[k] = (juce::uint8) juce::jlimit (1, 4, ra[k]); }
+            for (int l = 0; l < beat::numLanes; ++l)
+            {
+                auto lv = v[beat::laneIds[l]];
+                auto arr = intList (lv.isVoid() ? juce::String() : lv.toString(), beat::laneDef[l]);
+                for (int k = 0; k < beat::maxSteps; ++k) p.lane[l][k] = (juce::uint8) juce::jlimit (0, 127, arr[k]);
+            }
+            auto num = [&] (const char* id, double def) { auto x = v[id]; return x.isVoid() ? def : (double) x; };
+            p.peAmt = (float) num ("pe_amt", 0); p.peD1 = (float) num ("pe_d1", 60); p.peBrk = (float) num ("pe_brk", 0.3); p.peD2 = (float) num ("pe_d2", 300);
+            p.fType = (int) num ("f_type", 0); p.fSlope = (int) num ("f_slope", 1); p.fCut = (float) num ("f_cut", 20000); p.fRes = (float) num ("f_res", 0.1); p.fGain = (float) num ("f_gain", 0);
+            p.bus = juce::jlimit (0, beat::numBuses, (int) num ("bus", 0));
         }
         const juce::SpinLock::ScopedLockType l (snapLock);
         snap = s;
     }
 
+    struct SVF   // TPT state-variable filter (Cytomic)
+    {
+        float ic1[2] {}, ic2[2] {}, g = 0, k = 1, a1 = 0, a2 = 0, a3 = 0;
+        void set (double fc, double q, double sr)
+        {
+            g = (float) std::tan (juce::MathConstants<double>::pi * juce::jlimit (10.0, sr * 0.49, fc) / sr); k = (float) (1.0 / q);
+            a1 = 1.0f / (1.0f + g * (g + k)); a2 = g * a1; a3 = g * a2;
+        }
+        float process (float x, int ch, int type)
+        {
+            const float v3 = x - ic2[ch], v1 = a1 * ic1[ch] + a2 * v3, v2 = ic2[ch] + a2 * ic1[ch] + a3 * v3;
+            ic1[ch] = 2 * v1 - ic1[ch]; ic2[ch] = 2 * v2 - ic2[ch];
+            return type == 1 ? v2 : type == 2 ? x - k * v1 - v2 : v1;   // LP / HP / BP
+        }
+        void reset() { ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0; }
+    };
+    struct OnePole { float z[2] {}; float a = 0; void set (double fc, double sr) { a = (float) std::exp (-juce::MathConstants<double>::twoPi * juce::jlimit (10.0, sr * 0.49, fc) / sr); }
+                     float lp (float x, int ch) { z[ch] = x * (1 - a) + z[ch] * a; return z[ch]; } };
     struct Voice
     {
         bool active = false, releasing = false;
-        int pad = 0, delay = 0; double pos = 0, inc = 1, a = 0, b = 0; float gl = 1, gr = 1, env = 0, atkInc = 1, decStartGain = 1, relInc = 0.01f;
+        int pad = 0, delay = 0; double pos = 0, inc = 1, a = 0, b = 0; float gl = 1, gr = 1, env = 0, atkInc = 1, relInc = 0.01f;
         int decayLen = 0; bool reverse = false;
+        // pitch envelope
+        float peAmt = 0, peLevel = 1, peK1 = 0, peK2 = 0, peBrk = 0.3f; bool peStage2 = false;
+        // filtr
+        int fType = 0, fStages = 1; bool onePole = false; SVF svf[2]; OnePole op; float fGain = 1;
+        // gate, fx, shina
+        double gateLen = 1e18, played = 0; float fxSend = 0; int bus = 0;
+        juce::uint32 startedAt = 0;
         std::shared_ptr<const juce::AudioBuffer<float>> buf;
     };
-    void trigger (const beat::Snapshot& s, int p, int vel, int offset)
+    // stepIdx >= 0 — sekvenserdan (lane qiymatlari qo'llanadi), stepSec — step davomiyligi
+    void trigger (const beat::Snapshot& s, int p, int vel, int offset, int stepIdx = -1, double stepSec = 0.125)
     {
         if (p < 0 || p >= beat::numPads) return;
         const auto& pd = s.pads[p];
@@ -432,50 +505,125 @@ private:
         Voice* v = nullptr;
         for (auto& x : voices) if (! x.active) { v = &x; break; }
         if (v == nullptr) { v = &voices[(size_t) (nextSteal++ % voices.size())]; }
+        auto lane = [&] (int l) { return stepIdx >= 0 ? (int) pd.lane[l][stepIdx] : beat::laneDef[l]; };
         const int N = pd.sample->getNumSamples();
         v->a = juce::jlimit (0.0, (double) N - 2, (double) pd.start * N);
         v->b = juce::jlimit (v->a + 1, (double) N - 1, (double) pd.end * N);
         v->reverse = pd.reverse; v->pos = v->reverse ? v->b : v->a;
-        v->inc = pd.sampleRate / outRate * std::pow (2.0, pd.tune / 12.0);
-        const float g = pd.gain * s.master * std::pow (juce::jlimit (1, 127, vel) / 127.0f, 1.2f);
-        const float pan = juce::jlimit (-1.0f, 1.0f, pd.pan);
+        const float lanePitch = (lane (beat::lanePitch) - 64) / 64.0f * 12.0f;
+        v->inc = pd.sampleRate / outRate * std::pow (2.0, (pd.tune + lanePitch) / 12.0);
+        const float g = pd.gain * std::pow (juce::jlimit (1, 127, vel) / 127.0f, 1.2f);
+        const float pan = juce::jlimit (-1.0f, 1.0f, pd.pan + (lane (beat::lanePan) - 64) / 64.0f);
         v->gl = g * std::cos ((pan + 1) * juce::MathConstants<float>::pi * 0.25f) * 1.4142f;
         v->gr = g * std::sin ((pan + 1) * juce::MathConstants<float>::pi * 0.25f) * 1.4142f;
         v->atkInc = pd.attackMs > 0.1f ? 1.0f / (pd.attackMs * 0.001f * (float) outRate) : 1.0f;
         v->env = pd.attackMs > 0.1f ? 0.0f : 1.0f;
-        v->decayLen = (int) (pd.decayMs * 0.001 * outRate * v->inc);   // manba namunalarida
+        v->decayLen = (int) (pd.decayMs * 0.001 * outRate * v->inc);
+        // pitch envelope (Battery): amount -> break darajasigacha decay1, keyin decay2 bilan 0 ga
+        v->peAmt = pd.peAmt; v->peLevel = 1.0f; v->peStage2 = false; v->peBrk = juce::jlimit (0.0f, 1.0f, pd.peBrk);
+        v->peK1 = std::exp (-1.0f / juce::jmax (1.0f, pd.peD1 * 0.001f * (float) outRate));
+        v->peK2 = std::exp (-1.0f / juce::jmax (1.0f, pd.peD2 * 0.001f * (float) outRate));
+        // filtr: pad sozlamasi + step lane'lari (cutoff, resonance)
+        const int lc = lane (beat::laneCut), lr = lane (beat::laneRes);
+        v->fType = pd.fType == 0 && lc < 127 ? 1 : pd.fType;
+        double fc = (pd.fType == 0 ? 20000.0 : pd.fCut) * std::pow (2.0, (lc - 127) / 127.0 * 8.0);
+        const double res = juce::jlimit (0.0, 1.0, (double) pd.fRes + lr / 127.0);
+        const double q = 0.5 + res * res * 11.5;
+        v->fStages = pd.fSlope == 2 ? 2 : 1; v->onePole = pd.fSlope == 0;
+        for (auto& f : v->svf) { f.set (fc, pd.fSlope == 0 ? 0.707 : q, outRate); f.reset(); }
+        v->op.set (fc, outRate); v->op.z[0] = v->op.z[1] = 0;
+        v->fGain = juce::Decibels::decibelsToGain (pd.fGain);
+        // gate (step uzunligiga nisbatan emas — sample bo'lagi uzunligiga nisbatan), fx send, shina
+        const int gl = lane (beat::laneGate);
+        v->gateLen = gl >= 127 ? 1e18 : juce::jmax (0.01, gl / 127.0) * (v->b - v->a) / juce::jmax (1e-9, v->inc);
+        v->played = 0;
+        v->fxSend = lane (beat::laneFx) / 127.0f;
+        v->bus = pd.bus;
         v->releasing = false; v->relInc = 0.0f; v->pad = p; v->delay = offset; v->buf = pd.sample; v->active = true;
+        v->startedAt = juce::Time::getMillisecondCounter();
         padHit[p] = juce::Time::getMillisecondCounter();
+        juce::ignoreUnused (stepSec);
     }
-    void render (const beat::Snapshot&, juce::AudioBuffer<float>& out, int s0, int n)
+    void render (const beat::Snapshot& sn, juce::AudioBuffer<float>& out, int s0, int n)
     {
-        auto* L = out.getWritePointer (0, s0);
-        auto* R = out.getNumChannels() > 1 ? out.getWritePointer (1, s0) : nullptr;
+        if (busBuf.getNumSamples() < n) return;
+        busBuf.clear (0, n);
+        float lastPos[beat::numPads]; for (auto& x : lastPos) x = -1;
+        juce::uint32 newest[beat::numPads] {};
         for (auto& v : voices)
         {
             if (! v.active) continue;
             const auto& b = *v.buf;
             const float* c0 = b.getReadPointer (0); const float* c1 = b.getReadPointer (juce::jmin (1, b.getNumChannels() - 1));
+            const int bi = juce::jlimit (0, beat::numBuses, v.bus);
+            auto* L = busBuf.getWritePointer (bi * 2), *R = busBuf.getWritePointer (bi * 2 + 1);
+            auto* FL = busBuf.getWritePointer (10), *FR = busBuf.getWritePointer (11);
             for (int i = juce::jmax (0, v.delay); i < n; ++i)
             {
                 const int ip = (int) v.pos; const float fr = (float) (v.pos - ip);
                 if (ip < 0 || ip + 1 >= b.getNumSamples()) { v.active = false; break; }
                 float xl = c0[ip] + (c0[ip + 1] - c0[ip]) * fr, xr = c1[ip] + (c1[ip + 1] - c1[ip]) * fr;
-                // oxirida decay (fade)
+                if (v.fType > 0)
+                {
+                    if (v.onePole && v.fType != 3)
+                    {   // 1P: 6 dB/okt
+                        const float ll = v.op.lp (xl, 0), lr = v.op.lp (xr, 1);
+                        xl = v.fType == 1 ? ll : xl - ll; xr = v.fType == 1 ? lr : xr - lr;
+                    }
+                    else for (int st = 0; st < v.fStages; ++st) { xl = v.svf[st].process (xl, 0, v.fType); xr = v.svf[st].process (xr, 1, v.fType); }
+                    xl *= v.fGain; xr *= v.fGain;
+                }
                 const double remain = v.reverse ? v.pos - v.a : v.b - v.pos;
                 float fade = 1.0f;
                 if (v.decayLen > 0 && remain < v.decayLen) fade = (float) (remain / v.decayLen);
+                if (v.played > v.gateLen && ! v.releasing) { v.releasing = true; v.relInc = 1.0f / (0.006f * (float) outRate); }
                 if (v.env < 1.0f && ! v.releasing) v.env = juce::jmin (1.0f, v.env + v.atkInc);
                 if (v.releasing) { v.env -= v.relInc > 0 ? v.relInc : 0.01f; if (v.env <= 0) { v.active = false; break; } }
                 const float g = v.env * fade;
-                L[i] += xl * v.gl * g; if (R) R[i] += xr * v.gr * g;
-                v.pos += v.reverse ? -v.inc : v.inc;
+                const float ol = xl * v.gl * g, orr = xr * v.gr * g;
+                L[i] += ol; R[i] += orr;
+                if (v.fxSend > 0) { FL[i] += ol * v.fxSend; FR[i] += orr * v.fxSend; }
+                // pitch envelope
+                double inc = v.inc;
+                if (std::abs (v.peAmt) > 0.01f)
+                {
+                    if (! v.peStage2) { v.peLevel *= v.peK1; if (v.peLevel <= v.peBrk) v.peStage2 = true; } else v.peLevel *= v.peK2;
+                    inc *= std::pow (2.0, v.peAmt * v.peLevel / 12.0);
+                }
+                v.pos += v.reverse ? -inc : inc; v.played += 1;
                 if (v.reverse ? v.pos <= v.a : v.pos >= v.b) { v.active = false; break; }
             }
             v.delay = juce::jmax (0, v.delay - n);
+            if (v.active && v.delay == 0 && v.startedAt >= newest[v.pad])
+            { newest[v.pad] = v.startedAt; lastPos[v.pad] = (float) (v.pos / juce::jmax (1, b.getNumSamples())); }
+        }
+        for (int p = 0; p < beat::numPads; ++p) padPos[p] = lastPos[p];
+        // FX (reverb) qaytishi
+        reverb.processStereo (busBuf.getWritePointer (10), busBuf.getWritePointer (11), n);
+        // shinalar -> master
+        auto* L = out.getWritePointer (0, s0);
+        auto* R = out.getNumChannels() > 1 ? out.getWritePointer (1, s0) : nullptr;
+        for (int bi = 0; bi <= beat::numBuses + 1; ++bi)
+        {
+            const float gb = bi == 0 ? 1.0f : bi <= beat::numBuses ? sn.busGain[bi - 1] : sn.fxReturn;
+            const int ch = bi <= beat::numBuses ? bi * 2 : 10;
+            const float* a = busBuf.getReadPointer (ch), *b2 = busBuf.getReadPointer (ch + 1);
+            float pk = 0;
+            for (int i = 0; i < n; ++i)
+            {
+                const float l = a[i] * gb * sn.master, r = b2[i] * gb * sn.master;
+                L[i] += l; if (R) R[i] += r;
+                pk = juce::jmax (pk, std::abs (l), std::abs (r));
+            }
+            busPeak[bi] = juce::jmax (pk, busPeak[bi].load() * 0.92f);
         }
     }
-
+public:
+    std::atomic<float> padPos[beat::numPads] {};          // pad'ning hozir chalinayotgan joyi (0..1), -1 = jim
+    std::atomic<float> busPeak[beat::numBuses + 2] {};    // 0 = master (to'g'ridan), 1..4 = Bus, 5 = FX
+private:
+    juce::AudioBuffer<float> busBuf { 12, 8192 };
+    juce::Reverb reverb;
     std::array<Voice, 48> voices; unsigned nextSteal = 0;
     std::shared_ptr<const beat::Snapshot> snap; juce::SpinLock snapLock;
     std::atomic<double> bpmCache { 120.0 };
@@ -503,7 +651,7 @@ public:
         nextB.onClick = [this] { browse (+1, juce::ModifierKeys::currentModifiers.isShiftDown()); };
         normB.onClick = [this] { plugin.pad (sel).setProperty ("norm", normB.getToggleState(), plugin.um()); plugin.previewPad (sel); };
         setWantsKeyboardFocus (true);
-        sliceB.setTooltip (U ("Loopni transientlar bo'yicha 16 padga bo'lish va patternni avtomatik yozish (Nerve)"));
+        sliceB.setTooltip (U ("Loopni transientlar bo'yicha 20 padga bo'lish va patternni avtomatik yozish (Nerve)"));
         toMidiB.setTooltip (U ("Patternni trekka MIDI klip qilib qo'yish (keyin tahrirlash uchun)"));
         syncB.setTooltip (U ("Loopni loyiha tempiga moslash"));
         for (auto* b : { &seqB, &revB, &syncB, &muteB, &soloB, &normB }) b->setClickingTogglesState (true);
@@ -522,14 +670,13 @@ public:
         knob (gainK, -36, 12, 0.1, " dB"); knob (panK, -1, 1, 0.01, ""); knob (tuneK, -24, 24, 1, " st"); knob (fineK, -100, 100, 1, " ct");
         knob (atkK, 0, 200, 0.5, " ms", 20); knob (decK, 0, 2000, 1, " ms", 200); knob (dlyK, -250, 250, 0.1, " ms");
         dlyK.getProperties().set ("bipolar", true); dlyK.setDoubleClickReturnValue (true, 0);
-        dlyK.setTooltip (U ("Delay: sample'ni kechiktirish (+) yoki ertaroq chalish (\xe2\x88\x92), millisekundda")); knob (swingK, 0, 75, 1, "%"); knob (masterK, -24, 6, 0.1, " dB");
+        dlyK.setTooltip (U ("Delay: sample'ni kechiktirish (+) yoki ertaroq chalish (\xe2\x88\x92), millisekundda")); knob (swingK, 0, 75, 1, "%");
         panK.getProperties().set ("bipolar", true); tuneK.getProperties().set ("bipolar", true); fineK.getProperties().set ("bipolar", true);
         gainK.setDoubleClickReturnValue (true, 0); panK.setDoubleClickReturnValue (true, 0); tuneK.setDoubleClickReturnValue (true, 0); fineK.setDoubleClickReturnValue (true, 0);
 
         auto bindPad = [this] (juce::Slider& s, const char* id) { s.onValueChange = [this, &s, id] { plugin.pad (sel).setProperty (id, s.getValue(), plugin.um()); repaint(); }; };
         bindPad (gainK, "gain"); bindPad (panK, "pan"); bindPad (tuneK, "tune"); bindPad (fineK, "fine"); bindPad (atkK, "attack"); bindPad (decK, "decay"); bindPad (dlyK, "delay");
         swingK.onValueChange = [this] { plugin.state.setProperty ("swing", swingK.getValue() / 100.0, plugin.um()); };
-        masterK.onValueChange = [this] { plugin.state.setProperty ("master", masterK.getValue(), plugin.um()); };
         revB.onClick  = [this] { plugin.pad (sel).setProperty ("reverse", revB.getToggleState(), plugin.um()); repaint(); };
         syncB.onClick = [this] { plugin.pad (sel).setProperty ("sync", syncB.getToggleState(), plugin.um()); };
         muteB.onClick = [this] { plugin.pad (sel).setProperty ("mute", muteB.getToggleState(), plugin.um()); repaint(); };
@@ -560,8 +707,70 @@ public:
         defaultB.onClick = [this] { plugin.loadDefaultKit (false); refresh(); };
         sliceB.onClick = [this] { chooseFile (U ("Loop tanlang (Slice)"), "*.wav;*.aif;*.aiff;*.flac;*.mp3", false, [this] (juce::File f) { doSlice (f); }); };
         toMidiB.onClick = [this] { patternToMidi(); };
+
+        // ---- Nerve lane tablari: velocity + 7 lane
+        for (int i = 0; i < 8; ++i)
+        {
+            auto* b = laneTabs.add (new juce::TextButton (i == 0 ? juce::String ("velocity") : juce::String (beat::laneNames[i - 1])));
+            addAndMakeVisible (b); b->setClickingTogglesState (true); b->setRadioGroupId (771);
+            b->getProperties().set ("radius", 4.0f);
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff4ad6ff).withAlpha (0.35f));
+            b->onClick = [this, i] { if (laneTabs[i]->getToggleState()) { lane = i - 1; repaint(); } };
+        }
+        laneTabs[0]->setToggleState (true, juce::dontSendNotification);
+        laneTabs[0]->setTooltip (U ("Step velocity (Nerve)"));
+
+        // ---- Buses (Battery): Bus 1-4, FX qaytishi, Master — vertikal faderlar, g'ildirak bilan ham
+        auto fader = [this] (juce::Slider& f, const juce::String& prop, double def)
+        {
+            addAndMakeVisible (f); f.setSliderStyle (juce::Slider::LinearVertical);
+            f.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 58, 15); f.setRange (-60.0, 6.0, 0.1); f.setSkewFactorFromMidPoint (-12.0);
+            f.setTextValueSuffix (" dB"); f.setDoubleClickReturnValue (true, def); f.setScrollWheelEnabled (true);
+            f.setMouseDragSensitivity (180);
+            f.onValueChange = [this, &f, prop] { plugin.state.setProperty (prop, f.getValue(), plugin.um()); };
+        };
+        for (int b = 0; b < beat::numBuses; ++b) fader (busF[b], "bus" + juce::String (b + 1), 0.0);
+        fader (fxF, "fxReturn", -6.0);
+        fader (masterK, "master", 0.0);
+        masterK.onValueChange = [this] { plugin.state.setProperty ("master", masterK.getValue(), plugin.um()); };
+        addAndMakeVisible (busBox);
+        busBox.addItem ("Out: Master", 1); for (int b = 1; b <= beat::numBuses; ++b) busBox.addItem ("Out: Bus " + juce::String (b), b + 1);
+        busBox.setTooltip (U ("Tanlangan pad qaysi shinaga chiqadi (Battery Buses)"));
+        busBox.onChange = [this] { plugin.pad (sel).setProperty ("bus", busBox.getSelectedId() - 1, plugin.um()); repaint(); };
+
+        // ---- Pitch Envelope (Battery)
+        knob (peAmtK, -48, 48, 0.1, " st"); peAmtK.getProperties().set ("bipolar", true); peAmtK.setDoubleClickReturnValue (true, 0);
+        knob (peD1K, 1, 2000, 1, " ms", 80); knob (peBrkK, 0, 1, 0.01, ""); knob (peD2K, 1, 5000, 1, " ms", 400);
+        bindPad (peAmtK, "pe_amt"); bindPad (peD1K, "pe_d1"); bindPad (peBrkK, "pe_brk"); bindPad (peD2K, "pe_d2");
+        peBrkK.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
+
+        // ---- Filter / EQ (Battery)
+        const char* ft[] = { "OFF", "LOWPASS", "HIPASS", "BANDPASS" };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* b = fTypeB.add (new juce::TextButton (ft[i])); addAndMakeVisible (b);
+            b->setClickingTogglesState (true); b->setRadioGroupId (772); b->getProperties().set ("radius", 4.0f);
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc04a).withAlpha (0.35f));
+            b->onClick = [this, i] { if (fTypeB[i]->getToggleState()) { plugin.pad (sel).setProperty ("f_type", i, plugin.um()); repaint(); } };
+        }
+        const char* fs[] = { "1P", "2P", "4P" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto* b = fSlopeB.add (new juce::TextButton (fs[i])); addAndMakeVisible (b);
+            b->setClickingTogglesState (true); b->setRadioGroupId (773); b->getProperties().set ("radius", 4.0f);
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc04a).withAlpha (0.35f));
+            b->setTooltip (i == 0 ? "6 dB/okt" : i == 1 ? "12 dB/okt" : "24 dB/okt");
+            b->onClick = [this, i] { if (fSlopeB[i]->getToggleState()) { plugin.pad (sel).setProperty ("f_slope", i, plugin.um()); repaint(); } };
+        }
+        knob (fCutK, 20, 20000, 1, "", 1000); knob (fResK, 0, 1, 0.01, ""); knob (fGainK, -24, 24, 0.1, " dB");
+        fGainK.getProperties().set ("bipolar", true); fGainK.setDoubleClickReturnValue (true, 0); fCutK.setDoubleClickReturnValue (true, 20000);
+        fResK.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
+        fCutK.textFromValueFunction = [] (double v) { return v >= 1000 ? juce::String (v / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz"; };
+        bindPad (fCutK, "f_cut"); bindPad (fResK, "f_res"); bindPad (fGainK, "f_gain");
+        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK, &swingK, &peAmtK, &peD1K, &peBrkK, &peD2K, &fCutK, &fResK, &fGainK })
+            k->setScrollWheelEnabled (true);
         refresh();
-        setSize (1180, 700);
+        setSize (1240, 888);
         startTimerHz (30);
     }
     ~BeatEditor() override { stopTimer(); }
@@ -583,24 +792,37 @@ public:
         rateBox.setSelectedId ((int) plugin.state["rate"] + 1, juce::dontSendNotification);
         swingK.setValue ((double) plugin.state["swing"] * 100.0, juce::dontSendNotification);
         masterK.setValue ((double) plugin.state["master"], juce::dontSendNotification);
+        for (int b = 0; b < beat::numBuses; ++b) busF[b].setValue ((double) plugin.state.getProperty ("bus" + juce::String (b + 1), 0.0), juce::dontSendNotification);
+        fxF.setValue ((double) plugin.state.getProperty ("fxReturn", -6.0), juce::dontSendNotification);
+        busBox.setSelectedId ((int) v.getProperty ("bus", 0) + 1, juce::dontSendNotification);
+        for (auto [s, id, d] : std::initializer_list<std::tuple<juce::Slider*, const char*, double>> { { &peAmtK, "pe_amt", 0.0 }, { &peD1K, "pe_d1", 60.0 }, { &peBrkK, "pe_brk", 0.3 }, { &peD2K, "pe_d2", 300.0 },
+                                                                                                      { &fCutK, "f_cut", 20000.0 }, { &fResK, "f_res", 0.1 }, { &fGainK, "f_gain", 0.0 } })
+            s->setValue ((double) v.getProperty (id, d), juce::dontSendNotification);
+        fTypeB[juce::jlimit (0, 3, (int) v.getProperty ("f_type", 0))]->setToggleState (true, juce::dontSendNotification);
+        fSlopeB[juce::jlimit (0, 2, (int) v.getProperty ("f_slope", 1))]->setToggleState (true, juce::dontSendNotification);
         repaint();
     }
 
     // ---------------------------------------------------------------- joylashuv
+    static constexpr float rowH = 17.0f;
     juce::Rectangle<float> padRect (int i) const
     {
-        const int row = 3 - i / 4, col = i % 4;              // Battery: 1-pad pastki chapda (MPC kabi)
-        const float s = 86, g = 8;
-        return { 16 + col * (s + g), 64 + row * (s + g), s, s };
+        const int row = 4 - i / 4, col = i % 4;              // Battery: 1-pad pastki chapda (MPC kabi), 20 pad = 4 x 5
+        const float sz = 70, g = 7;
+        return { 16 + col * (sz + g), 64 + row * (sz + g), sz, sz };
     }
-    juce::Rectangle<float> gridArea() const { return { 420, 64, (float) getWidth() - 436, 16 * 20.0f }; }
+    juce::Rectangle<float> gridArea() const { return { 340, 88, (float) getWidth() - 356, beat::numPads * rowH }; }
+    juce::Rectangle<float> laneArea() const { return gridArea().withTrimmedLeft (110); }
     juce::Rectangle<float> cell (int p, int s) const
     {
         auto g = gridArea().withTrimmedLeft (110);
         const float w = g.getWidth() / plugin.length();
-        return { g.getX() + s * w, g.getY() + p * 20.0f, w, 20.0f };
+        return { g.getX() + s * w, g.getY() + p * rowH, w, rowH };
     }
-    juce::Rectangle<float> waveArea() const { return { 16, 470, 560, 150 }; }
+    juce::Rectangle<float> waveArea() const { return { 16, 488, 580, 130 }; }
+    juce::Rectangle<float> busPanel() const { return { 16, 636, 580, 224 }; }
+    juce::Rectangle<float> pePanel() const  { return { 612, 636, 296, 224 }; }
+    juce::Rectangle<float> fltPanel() const { return { 920, 636, (float) getWidth() - 936, 224 }; }
 
     void resized() override
     {
@@ -611,16 +833,40 @@ public:
         seqB.setBounds (top.removeFromLeft (52)); top.removeFromLeft (4); lenBox.setBounds (top.removeFromLeft (88)); top.removeFromLeft (4);
         rateBox.setBounds (top.removeFromLeft (70)); top.removeFromLeft (4); clearB.setBounds (top.removeFromLeft (76)); top.removeFromLeft (4);
         humanB.setBounds (top.removeFromLeft (86));
-        // pad paneli (pastki)
+        // Nerve lane tablari
+        {
+            int x = 340; const int w = (int) ((getWidth() - 356 - 7 * 4) / 8);
+            for (auto* b : laneTabs) { b->setBounds (x, 60, w, 22); x += w + 4; }
+        }
+        // pad paneli
         const int y = 470;
-        int x = 596;
-        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK }) { k->setBounds (x, y + 6, 58, 78); x += 60; }
-        x = 596;
-        loadSmpB.setBounds (x, y + 98, 90, 26); revB.setBounds (x + 96, y + 98, 80, 26); syncB.setBounds (x + 182, y + 98, 62, 26);
-        chokeBox.setBounds (x + 250, y + 98, 96, 26); muteB.setBounds (x + 352, y + 98, 30, 26); soloB.setBounds (x + 386, y + 98, 30, 26);
-        normB.setBounds (x, y + 130, 120, 24);
-        prevB.setBounds (16, y - 22, 26, 18); nextB.setBounds (46, y - 22, 26, 18);
-        swingK.setBounds (getWidth() - 152, y + 6, 64, 78); masterK.setBounds (getWidth() - 80, y + 6, 64, 78);
+        int x = 620;
+        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK }) { k->setBounds (x, y + 6, 58, 78); x += 62; }
+        swingK.setBounds (getWidth() - 82, y + 6, 64, 78);
+        x = 620;
+        loadSmpB.setBounds (x, 568, 90, 26); revB.setBounds (x + 96, 568, 80, 26); syncB.setBounds (x + 182, 568, 62, 26);
+        chokeBox.setBounds (x + 250, 568, 96, 26); muteB.setBounds (x + 352, 568, 30, 26); soloB.setBounds (x + 386, 568, 30, 26);
+        normB.setBounds (x, 600, 120, 24); busBox.setBounds (x + 126, 600, 120, 24);
+        prevB.setBounds (16, 466, 26, 18); nextB.setBounds (46, 466, 26, 18);
+        // Buses
+        auto bp = busPanel().toNearestInt();
+        const int cw = bp.getWidth() / 6;
+        juce::Slider* fs[] = { &busF[0], &busF[1], &busF[2], &busF[3], &fxF, &masterK };
+        for (int i = 0; i < 6; ++i) fs[i]->setBounds (bp.getX() + i * cw + 8, bp.getY() + 28, 52, 168);
+        // Pitch envelope
+        auto pe = pePanel().toNearestInt();
+        x = pe.getX() + 8;
+        for (auto* k : { &peAmtK, &peD1K, &peBrkK, &peD2K }) { k->setBounds (x, pe.getY() + 136, 66, 80); x += 70; }
+        // Filter / EQ
+        auto fp = fltPanel().toNearestInt();
+        {
+            int fx = fp.getX() + 8; const int bw = (fp.getWidth() - 16 - 3 * 3) / 4;
+            for (auto* b : fTypeB) { b->setBounds (fx, fp.getY() + 24, bw, 20); fx += bw + 3; }
+            fx = fp.getX() + 8;
+            for (auto* b : fSlopeB) { b->setBounds (fx, fp.getY() + 48, 36, 20); fx += 39; }
+            fx = fp.getX() + 8; const int kw = (fp.getWidth() - 16) / 3;
+            for (auto* k : { &fCutK, &fResK, &fGainK }) { k->setBounds (fx + (kw - 66) / 2, fp.getY() + 136, 66, 80); fx += kw; }
+        }
     }
 
     void paint (juce::Graphics& g) override
@@ -657,13 +903,15 @@ public:
         const int L = plugin.length(); const int ps = plugin.playStep.load();
         auto ga = gridArea();
         const String dot = String::fromUTF8 ("  \xc2\xb7  ");
-        caps (g, "SEQUENCER" + dot + String (L) + " step" + dot + String (beat::rateNames[jlimit (0, 3, (int) plugin.state["rate"])]), { ga.getX(), 48, 400, 12 }, 8.5f);
+        caps (g, "SEQUENCER" + dot + String (L) + " step" + dot + String (beat::rateNames[jlimit (0, 3, (int) plugin.state["rate"])]), { ga.getX(), 44, 400, 12 }, 8.5f);
         for (int p = 0; p < beat::numPads; ++p)
         {
             auto v = plugin.pad (p);
-            auto row = Rectangle<float> (ga.getX(), ga.getY() + p * 20.0f, 106, 18);
+            auto row = Rectangle<float> (ga.getX(), ga.getY() + p * rowH, 106, rowH - 2);
             g.setColour (p == sel ? beatColour (p).withAlpha (0.25f) : Colours::white.withAlpha (0.03f)); g.fillRoundedRectangle (row, 4);
-            label (g, String (p + 1) + "  " + (v["name"].toString().isEmpty() ? String::fromUTF8 ("\xe2\x80\x94") : v["name"].toString()), row.reduced (6, 0), 9, (bool) v["mute"] ? dim2 : text, Justification::centredLeft, 500);
+            label (g, String (p + 1) + "  " + (v["name"].toString().isEmpty() ? String::fromUTF8 ("\xe2\x80\x94") : v["name"].toString()), row.reduced (6, 0), 8.5f, (bool) v["mute"] ? dim2 : text, Justification::centredLeft, 500);
+            if (const int bus = (int) v.getProperty ("bus", 0); bus > 0) label (g, "B" + String (bus), row.reduced (4, 0), 7.5f, Colour (0xff4ad6ff), Justification::centredRight, 700);
+            if (lane >= 0) continue;
             auto st = AzBeatPlugin::intList (v["steps"], 0), ra = AzBeatPlugin::intList (v["ratchet"], 1);
             for (int s = 0; s < L; ++s)
             {
@@ -674,16 +922,18 @@ public:
                 {
                     const float h = c.getHeight() * (0.35f + 0.65f * vel / 127.0f);
                     g.setColour (beatColour (p).withAlpha (0.55f + 0.45f * vel / 127.0f)); g.fillRoundedRectangle (c.withTop (c.getBottom() - h), 2.5f);
-                    if (ra[s] > 1) label (g, "x" + String (ra[s]), c, 8, Colours::white, Justification::centred, 700);
+                    if (ra[s] > 1) label (g, "x" + String (ra[s]), c, 7.5f, Colours::white, Justification::centred, 700);
                 }
             }
         }
-        if (ps >= 0 && ps < L) { auto c = cell (0, ps); g.setColour (Colours::white.withAlpha (0.5f)); g.fillRect (c.getX(), ga.getY() - 5, c.getWidth(), 3.0f); }
-        label (g, U ("Bosish: qo'yish/olish \xc2\xb7 vertikal sudrash: velocity \xc2\xb7 Shift+bosish: ratchet x2/x3/x4 \xc2\xb7 o'ng tugma: qatorni to'ldirish"),
-               { ga.getX(), ga.getBottom() + 6, ga.getWidth(), 14 }, 9, dim2, Justification::centredLeft, 400);
-        // tanlangan pad: to'lqin + start/end
+        if (lane >= 0) paintLane (g);
+        if (ps >= 0 && ps < L) { auto c = cell (0, ps); g.setColour (Colours::white.withAlpha (0.5f)); g.fillRect (c.getX(), ga.getY() - 4, c.getWidth(), 3.0f); }
+        label (g, lane < 0 ? U ("Bosish: qo'yish/olish \xc2\xb7 vertikal sudrash yoki g'ildirak: velocity \xc2\xb7 Shift+bosish: ratchet \xc2\xb7 o'ng tugma: qatorni to'ldirish")
+                           : U ("Lane: Pad ") + String (sel + 1) + U (" \xc2\xb7 chizib sudrang \xc2\xb7 g'ildirak: qiymat \xc2\xb1 \xc2\xb7 ikki marta bosish: standart qiymat \xc2\xb7 Alt+bosish: butun lane'ni tiklash"),
+               { ga.getX(), ga.getBottom() + 4, ga.getWidth(), 14 }, 9, dim2, Justification::centredLeft, 400);
+        // tanlangan pad: to'lqin + start/end + playhead
         auto wa = waveArea();
-        caps (g, "PAD " + String (sel + 1) + String::fromUTF8 ("  \xc2\xb7  ") + plugin.pad (sel)["name"].toString(), { wa.getX() + 64, wa.getY() - 18, 300, 12 }, 8.5f, beatColour (sel));
+        caps (g, "PAD " + String (sel + 1) + String::fromUTF8 ("  \xc2\xb7  ") + plugin.pad (sel)["name"].toString(), { wa.getX() + 64, wa.getY() - 18, 240, 12 }, 8.5f, beatColour (sel));
         if (matchText.isNotEmpty())
         {
             const Colour mc = matchScore == 2 ? green : matchScore == 1 ? yellow : red;
@@ -710,16 +960,182 @@ public:
             label (g, "S", { sx + 3, wa.getY() + 2, 12, 12 }, 9, green, Justification::centredLeft, 800);
             label (g, "E", { ex - 13, wa.getY() + 2, 12, 12 }, 9, red, Justification::centredLeft, 800);
             label (g, String (sr > 0 ? N / sr : 0.0, 2) + " s", wa.reduced (8, 4), 9, dim, Justification::bottomRight, 500);
+            // ovoz qayerda ketayotgani (playhead)
+            if (const float pp = plugin.padPos[sel].load(); pp >= 0.0f)
+            {
+                const float px = wa.getX() + wa.getWidth() * jlimit (0.0f, 1.0f, pp);
+                g.setColour (Colours::white.withAlpha (0.10f)); g.fillRect (jmin (sx, px), wa.getY(), std::abs (px - sx), wa.getHeight());
+                g.setColour (Colours::white); g.fillRect (px - 1.0f, wa.getY(), 2.0f, wa.getHeight());
+                Path tri; tri.addTriangle (px - 5, wa.getY(), px + 5, wa.getY(), px, wa.getY() + 7); g.fillPath (tri);
+            }
         }
         else label (g, U ("Sample yo'q \xe2\x80\x94 media brauzerdan sudrab tashlang yoki \"Sample...\""), wa, 10.5f, dim, Justification::centred, 500);
         const char* kn[] = { "GAIN", "PAN", "TUNE", "FINE", "ATTACK", "DECAY", "DELAY" };
-        int x = 596; for (auto* n : kn) { caps (g, n, { (float) x, 458, 58, 10 }, 8, n[1] == 'E' && n[2] == 'L' ? Colour (0xff4ad6ff) : dim, Justification::centred); x += 60; }
-        caps (g, "SWING", { (float) getWidth() - 152, 458, 64, 10 }, 8, dim, Justification::centred);
-        caps (g, "MASTER", { (float) getWidth() - 80, 458, 64, 10 }, 8, dim, Justification::centred);
-        g.setColour (Colours::white.withAlpha (0.06f)); g.drawVerticalLine (getWidth() - 160, 456, 560);
+        int x = 620; for (auto* n : kn) { caps (g, n, { (float) x, 458, 58, 10 }, 8, n[1] == 'E' && n[2] == 'L' ? Colour (0xff4ad6ff) : dim, Justification::centred); x += 62; }
+        caps (g, "SWING", { (float) getWidth() - 82, 458, 64, 10 }, 8, dim, Justification::centred);
+        g.setColour (Colours::white.withAlpha (0.06f)); g.drawVerticalLine (getWidth() - 92, 456, 560);
+        paintBuses (g); paintPitchEnv (g); paintFilter (g);
         if (dropHint >= 0) { g.setColour (Colours::white.withAlpha (0.8f)); g.drawRoundedRectangle (padRect (dropHint), 10, 2.5f); }
-        if (info.isNotEmpty()) label (g, info, { 16, (float) getHeight() - 26, (float) getWidth() - 32, 18 }, 10, silver, Justification::centredLeft, 500);
-        label (g, U ("MIDI: C1 (36) = Pad 1 \xe2\x80\xa6 D#2 (51) = Pad 16"), { 16, (float) getHeight() - 26, (float) getWidth() - 32, 18 }, 9, dim2, Justification::centredRight, 400);
+        if (info.isNotEmpty()) label (g, info, { 16, (float) getHeight() - 24, (float) getWidth() - 32, 18 }, 10, silver, Justification::centredLeft, 500);
+        label (g, U ("MIDI: C1 (36) = Pad 1 \xe2\x80\xa6 G2 (55) = Pad 20"), { 16, (float) getHeight() - 24, (float) getWidth() - 32, 18 }, 9, dim2, Justification::centredRight, 400);
+    }
+
+    // ---------------------------------------------------------------- Nerve lane (katta ustunlar)
+    static bool laneBipolar (int l) { return l == beat::lanePitch || l == beat::lanePan; }
+    void paintLane (juce::Graphics& g)
+    {
+        using namespace juce;
+        auto la = laneArea(); const int L = plugin.length(); const int ps = plugin.playStep.load();
+        g.setColour (Colour (0xff09080b)); g.fillRoundedRectangle (la, 6);
+        const Colour col = beatColour (sel);
+        const float w = la.getWidth() / L;
+        const float midY = la.getBottom() - la.getHeight() * 64.0f / 127.0f;
+        for (int s = 0; s < L; ++s)
+        {
+            auto c = Rectangle<float> (la.getX() + s * w, la.getY(), w, la.getHeight()).reduced (1.5f, 3.0f);
+            g.setColour (Colours::white.withAlpha (s == ps ? 0.10f : s % 4 == 0 ? 0.05f : 0.025f)); g.fillRoundedRectangle (c, 2);
+            const int val = plugin.laneVal (sel, lane, s);
+            const bool on = plugin.stepVel (sel, s) > 0;
+            const float vy = c.getBottom() - c.getHeight() * val / 127.0f;
+            g.setColour (col.withAlpha (on ? 0.85f : 0.28f));
+            if (laneBipolar (lane)) g.fillRect (Rectangle<float> (c.getX(), jmin (vy, midY), c.getWidth(), std::abs (vy - midY) + 1.5f));
+            else g.fillRoundedRectangle (c.withTop (vy), 2);
+            g.setColour (Colours::white.withAlpha (on ? 0.9f : 0.35f)); g.fillRect (c.getX(), vy - 1, c.getWidth(), 2.0f);
+        }
+        if (laneBipolar (lane)) { g.setColour (Colours::white.withAlpha (0.25f)); g.drawHorizontalLine ((int) midY, la.getX(), la.getRight()); }
+        label (g, String (beat::laneNames[lane]).toUpperCase() + String::fromUTF8 ("  \xc2\xb7  ") + laneValueText (lane, hoverStep >= 0 ? plugin.laneVal (sel, lane, hoverStep) : beat::laneDef[lane]),
+               la.reduced (8, 4).withHeight (14), 9, Colour (0xff4ad6ff), Justification::topRight, 700);
+    }
+    static juce::String laneValueText (int l, int v)
+    {
+        switch (l)
+        {
+            case beat::laneCut:   return juce::String (juce::roundToInt (v / 1.27)) + "%";
+            case beat::laneRes:   return juce::String (juce::roundToInt (v / 1.27)) + "%";
+            case beat::lanePitch: return juce::String ((v - 64) / 64.0 * 12.0, 1) + " st";
+            case beat::lanePan:   return v == 64 ? juce::String ("C") : (v < 64 ? "L" : "R") + juce::String (std::abs (v - 64) * 100 / 64);
+            case beat::laneGate:  return juce::String (juce::roundToInt (v / 1.27)) + "%";
+            case beat::laneLate:  return juce::String (juce::roundToInt (v / 1.27 * 0.5)) + "% step";
+            default:              return juce::String (juce::roundToInt (v / 1.27)) + "%";
+        }
+    }
+    int laneStepAt (juce::Point<float> pt) const
+    {
+        auto la = laneArea();
+        if (pt.x < la.getX() || pt.x >= la.getRight()) return -1;
+        return juce::jlimit (0, plugin.length() - 1, (int) ((pt.x - la.getX()) / (la.getWidth() / plugin.length())));
+    }
+    int laneValueAt (float y) const { auto la = laneArea().reduced (0, 3); return juce::jlimit (0, 127, juce::roundToInt ((la.getBottom() - y) / la.getHeight() * 127.0f)); }
+
+    // ---------------------------------------------------------------- Battery panellari
+    void panelBg (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& title)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.025f)); g.fillRoundedRectangle (r, 8);
+        g.setColour (juce::Colours::white.withAlpha (0.07f)); g.drawRoundedRectangle (r.reduced (0.5f), 8, 1.0f);
+        caps (g, title, r.reduced (10, 8).withHeight (12), 8.5f);
+    }
+    void paintBuses (juce::Graphics& g)
+    {
+        using namespace juce;
+        auto bp = busPanel(); panelBg (g, bp, "BUSES");
+        label (g, U ("g'ildirak / sudrash \xc2\xb7 ikki marta bosish: 0 dB"), bp.reduced (10, 8).withHeight (12), 8.5f, dim2, Justification::centredRight, 400);
+        const float cw = bp.getWidth() / 6.0f;
+        const char* names[] = { "BUS 1", "BUS 2", "BUS 3", "BUS 4", "FX", "MASTER" };
+        float mpk = 0; for (auto& b : plugin.busPeak) mpk = jmax (mpk, b.load());
+        for (int i = 0; i < 6; ++i)
+        {
+            const float pk = i < 4 ? plugin.busPeak[i + 1].load() : i == 4 ? plugin.busPeak[5].load() : mpk;
+            auto m = Rectangle<float> (bp.getX() + i * cw + 64, bp.getY() + 34, 7, 152);
+            g.setColour (Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (m, 2);
+            const float db = Decibels::gainToDecibels (pk, -60.0f);
+            const float h = m.getHeight() * jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
+            g.setGradientFill (ColourGradient (green, 0, m.getBottom(), red, 0, m.getY(), false));
+            g.fillRoundedRectangle (m.withTop (m.getBottom() - h), 2);
+            // shu shinaga yo'naltirilgan padlar soni
+            int cnt = 0; if (i < 4) for (int p = 0; p < beat::numPads; ++p) if ((int) plugin.pad (p).getProperty ("bus", 0) == i + 1) ++cnt;
+            const bool cur = i < 4 && (int) plugin.pad (sel).getProperty ("bus", 0) == i + 1;
+            label (g, names[i], { bp.getX() + i * cw, bp.getBottom() - 26, cw, 12 }, 8.5f, i == 5 ? red : cur ? Colour (0xff4ad6ff) : text, Justification::centred, 800);
+            if (i < 4) label (g, String (cnt) + " pad", { bp.getX() + i * cw, bp.getBottom() - 14, cw, 10 }, 7.5f, dim2, Justification::centred, 500);
+            if (i > 0) { g.setColour (Colours::white.withAlpha (0.05f)); g.drawVerticalLine ((int) (bp.getX() + i * cw), bp.getY() + 28, bp.getBottom() - 8); }
+        }
+    }
+    void paintPitchEnv (juce::Graphics& g)
+    {
+        using namespace juce;
+        auto pe = pePanel(); panelBg (g, pe, "PITCH ENVELOPE");
+        auto v = plugin.pad (sel);
+        const float amt = (float) (double) v.getProperty ("pe_amt", 0.0), d1 = (float) (double) v.getProperty ("pe_d1", 60.0),
+                    brk = (float) (double) v.getProperty ("pe_brk", 0.3), d2 = (float) (double) v.getProperty ("pe_d2", 300.0);
+        auto r = Rectangle<float> (pe.getX() + 10, pe.getY() + 26, pe.getWidth() - 20, 92);
+        g.setColour (Colour (0xff09080b)); g.fillRoundedRectangle (r, 6);
+        const float midY = r.getCentreY();
+        g.setColour (Colours::white.withAlpha (0.12f)); g.drawHorizontalLine ((int) midY, r.getX(), r.getRight());
+        // egri chiziq: decay1 -> break -> decay2
+        const float total = jmax (50.0f, d1 * 2.5f + d2 * 2.0f);
+        Path path; const float k1 = std::exp (-1.0f / jmax (0.001f, d1)), k2 = std::exp (-1.0f / jmax (0.001f, d2));
+        float lvl = 1.0f; bool st2 = false; float brkX = -1;
+        for (int i = 0; i <= (int) r.getWidth(); ++i)
+        {
+            const float tms = total * i / r.getWidth();
+            if (i > 0) { const float dt = total / r.getWidth(); for (int q = 0; q < 4; ++q) { if (! st2) { lvl *= std::pow (k1, dt / 4); if (lvl <= brk) { st2 = true; brkX = r.getX() + i; } } else lvl *= std::pow (k2, dt / 4); } }
+            const float y = midY - jlimit (-1.0f, 1.0f, amt / 48.0f) * lvl * (r.getHeight() * 0.45f);
+            if (i == 0) path.startNewSubPath (r.getX(), y); else path.lineTo (r.getX() + i, y);
+            ignoreUnused (tms);
+        }
+        const Colour c = std::abs (amt) > 0.01f ? Colour (0xffb98aff) : dim2;
+        g.setColour (c); g.strokePath (path, PathStrokeType (1.8f));
+        if (brkX > 0) { g.setColour (c.withAlpha (0.5f)); g.drawVerticalLine ((int) brkX, r.getY() + 4, r.getBottom() - 4); label (g, "break", { brkX + 3, r.getY() + 2, 40, 10 }, 7.5f, c, Justification::centredLeft, 600); }
+        label (g, String (amt >= 0 ? "+" : "") + String (amt, 1) + " st", r.reduced (6, 3), 8.5f, c, Justification::topRight, 700);
+        const char* kn[] = { "AMOUNT", "DECAY 1", "BREAK", "DECAY 2" };
+        for (int i = 0; i < 4; ++i) caps (g, kn[i], { pe.getX() + 8 + i * 70.0f, pe.getY() + 124, 66, 10 }, 8, dim, Justification::centred);
+    }
+    // filtrning taxminiy amplituda xarakteristikasi (dB)
+    static float filterResponseDb (int type, int slope, float fc, float res, float gainDb, float f)
+    {
+        if (type == 0) return 0.0f;
+        const double w = f / juce::jmax (10.0f, fc);
+        const double q = slope == 0 ? 0.707 : 0.5 + res * res * 11.5;
+        std::complex<double> s (0.0, w);
+        std::complex<double> h;
+        if (slope == 0) { const auto lp = 1.0 / (s + 1.0); h = type == 1 ? lp : type == 2 ? s / (s + 1.0) : s / (s * s + s / 0.707 + 1.0); }
+        else
+        {
+            const auto den = s * s + s / q + 1.0;
+            h = type == 1 ? 1.0 / den : type == 2 ? s * s / den : (s / q) / den;
+            if (slope == 2) h = h * h;
+        }
+        return (float) (20.0 * std::log10 (juce::jmax (1e-6, std::abs (h)))) + gainDb;
+    }
+    void paintFilter (juce::Graphics& g)
+    {
+        using namespace juce;
+        auto fp = fltPanel(); panelBg (g, fp, "FILTER / EQ");
+        auto v = plugin.pad (sel);
+        const int type = (int) v.getProperty ("f_type", 0), slope = (int) v.getProperty ("f_slope", 1);
+        const float fc = (float) (double) v.getProperty ("f_cut", 20000.0), res = (float) (double) v.getProperty ("f_res", 0.1), gdb = (float) (double) v.getProperty ("f_gain", 0.0);
+        auto r = Rectangle<float> (fp.getX() + 10, fp.getY() + 72, fp.getWidth() - 20, 50);
+        g.setColour (Colour (0xff09080b)); g.fillRoundedRectangle (r, 6);
+        for (float f : { 100.0f, 1000.0f, 10000.0f })
+        {
+            const float x = r.getX() + r.getWidth() * (std::log10 (f) - std::log10 (20.0f)) / 3.0f;
+            g.setColour (Colours::white.withAlpha (0.06f)); g.drawVerticalLine ((int) x, r.getY(), r.getBottom());
+        }
+        const float zeroY = r.getY() + r.getHeight() * 0.35f;
+        g.setColour (Colours::white.withAlpha (0.12f)); g.drawHorizontalLine ((int) zeroY, r.getX(), r.getRight());
+        Path path;
+        for (int i = 0; i <= (int) r.getWidth(); ++i)
+        {
+            const float f = 20.0f * std::pow (1000.0f, (float) i / r.getWidth());
+            const float db = jlimit (-48.0f, 24.0f, filterResponseDb (type, slope, fc, res, gdb, f));
+            const float y = jlimit (r.getY() + 1, r.getBottom() - 1, db > 0 ? zeroY - db / 24.0f * (zeroY - r.getY()) : zeroY - db / 48.0f * (r.getBottom() - zeroY));
+            if (i == 0) path.startNewSubPath (r.getX(), y); else path.lineTo (r.getX() + i, y);
+        }
+        const Colour c = type > 0 ? Colour (0xffffc04a) : dim2;
+        g.setColour (c); g.strokePath (path, PathStrokeType (1.8f));
+        const char* kn[] = { "CUTOFF", "RESO", "GAIN" };
+        const float kw = (fp.getWidth() - 16) / 3.0f;
+        for (int i = 0; i < 3; ++i) caps (g, kn[i], { fp.getX() + 8 + i * kw, fp.getY() + 124, kw, 10 }, 8, dim, Justification::centred);
+        label (g, slope == 0 ? "6 dB/okt" : slope == 1 ? "12 dB/okt" : "24 dB/okt", { fp.getRight() - 90, fp.getY() + 50, 80, 16 }, 8.5f, dim, Justification::centredRight, 600);
     }
 
     static juce::Colour beatColour (int i)
@@ -735,7 +1151,7 @@ public:
     {
         auto g = gridArea().withTrimmedLeft (110);
         if (! g.contains (pt)) return false;
-        p = (int) ((pt.y - g.getY()) / 20.0f); s = (int) ((pt.x - g.getX()) / (g.getWidth() / plugin.length()));
+        p = (int) ((pt.y - g.getY()) / rowH); s = (int) ((pt.x - g.getX()) / (g.getWidth() / plugin.length()));
         return p >= 0 && p < beat::numPads && s >= 0 && s < plugin.length();
     }
     void mouseDown (const juce::MouseEvent& e) override
@@ -746,6 +1162,12 @@ public:
             sel = p; refresh();
             if (e.mods.isPopupMenu()) padMenu (p); else plugin.previewPad (p, juce::jlimit (40, 127, (int) (127 - (e.position.y - padRect (p).getY()) * 0.6f)));
             return;
+        }
+        if (lane >= 0 && laneArea().contains (e.position))
+        {
+            plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT lane");
+            if (e.mods.isAltDown()) { for (int st = 0; st < plugin.length(); ++st) plugin.setLane (sel, lane, st, beat::laneDef[lane], plugin.um()); repaint(); return; }
+            dragMode = 4; lastLaneStep = -1; mouseDrag (e); return;
         }
         int p, s;
         if (cellAt (e.position, p, s))
@@ -762,7 +1184,7 @@ public:
         }
         if (auto r = gridArea().withWidth (106); r.contains (e.position))
         {
-            const int row = (int) ((e.position.y - r.getY()) / 20.0f);
+            const int row = (int) ((e.position.y - r.getY()) / rowH);
             if (row >= 0 && row < beat::numPads) { sel = row; refresh(); if (e.mods.isPopupMenu()) rowMenu (row); else plugin.previewPad (row); }
             return;
         }
@@ -776,6 +1198,24 @@ public:
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (dragMode == 4)
+        {   // lane chizish (oraliq steplarni ham to'ldiradi)
+            const int st = laneStepAt (e.position); if (st < 0) return;
+            const int val = laneValueAt (e.position.y);
+            if (lastLaneStep >= 0 && lastLaneStep != st)
+            {
+                const int a = juce::jmin (lastLaneStep, st), b = juce::jmax (lastLaneStep, st);
+                for (int k = a; k <= b; ++k)
+                {
+                    const float t = b == a ? 1.0f : (float) (k - lastLaneStep) / (float) (st - lastLaneStep);
+                    plugin.setLane (sel, lane, k, juce::roundToInt (lastLaneVal + (val - lastLaneVal) * t), plugin.um());
+                }
+            }
+            else plugin.setLane (sel, lane, st, val, plugin.um());
+            lastLaneStep = st; lastLaneVal = val; hoverStep = st;
+            info = juce::String (beat::laneNames[lane]) + "  step " + juce::String (st + 1) + ": " + laneValueText (lane, val);
+            repaint(); return;
+        }
         if (dragMode == 1)
         {
             int p, s;
@@ -801,6 +1241,54 @@ public:
         }
     }
     void mouseUp (const juce::MouseEvent&) override { if (dragMode == 2 || dragMode == 3) plugin.previewPad (sel); dragMode = 0; }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const int h = lane >= 0 && laneArea().contains (e.position) ? laneStepAt (e.position) : -1;
+        if (h != hoverStep) { hoverStep = h; repaint(); }
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (lane >= 0 && laneArea().contains (e.position))
+            if (const int st = laneStepAt (e.position); st >= 0) { plugin.setLane (sel, lane, st, beat::laneDef[lane], plugin.um()); repaint(); }
+    }
+    // sichqoncha g'ildiragi: step velocity / lane qiymati / pad gain
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const float dy = (std::abs (w.deltaY) > std::abs (w.deltaX) ? w.deltaY : -w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
+        if (dy == 0) return;
+        const int stepAmt = e.mods.isShiftDown() ? 1 : 4;
+        const int d = dy > 0 ? stepAmt : -stepAmt;
+        if (lane >= 0 && laneArea().contains (e.position))
+        {
+            if (const int st = laneStepAt (e.position); st >= 0)
+            {
+                const int nv = juce::jlimit (0, 127, plugin.laneVal (sel, lane, st) + d);
+                plugin.setLane (sel, lane, st, nv, plugin.um()); hoverStep = st;
+                info = juce::String (beat::laneNames[lane]) + "  step " + juce::String (st + 1) + ": " + laneValueText (lane, nv); repaint();
+            }
+            return;
+        }
+        int p, s;
+        if (lane < 0 && cellAt (e.position, p, s))
+        {
+            if (const int v = plugin.stepVel (p, s); v > 0)
+            {
+                plugin.setStep (p, s, juce::jlimit (1, 127, v + d), plugin.um());
+                info = "Velocity: " + juce::String (plugin.stepVel (p, s)); repaint();
+            }
+            return;
+        }
+        if (const int pp = padAt (e.position); pp >= 0)
+        {
+            auto v = plugin.pad (pp);
+            const double ng = juce::jlimit (-36.0, 12.0, (double) v["gain"] + (dy > 0 ? 0.5 : -0.5) * (e.mods.isShiftDown() ? 0.2 : 1.0));
+            v.setProperty ("gain", ng, plugin.um());
+            if (pp == sel) gainK.setValue (ng, juce::dontSendNotification);
+            info = "Pad " + juce::String (pp + 1) + " gain: " + juce::String (ng, 1) + " dB"; repaint();
+            return;
+        }
+        Component::mouseWheelMove (e, w);
+    }
 
     void padMenu (int p)
     {
@@ -945,7 +1433,7 @@ public:
     }
 
 private:
-    void timerCallback() override { if (++ticks % 8 == 0 || plugin.playStep.load() != lastStep || juce::Time::getMillisecondCounter() - lastHitPaint < 300) { lastStep = plugin.playStep.load(); repaint(); }
+    void timerCallback() override { if (++ticks % 8 == 0 || plugin.padPos[sel].load() >= 0.0f || ticks % 3 == 0 || plugin.playStep.load() != lastStep || juce::Time::getMillisecondCounter() - lastHitPaint < 300) { lastStep = plugin.playStep.load(); repaint(); }
                                     for (auto& h : plugin.padHit) if (juce::Time::getMillisecondCounter() - h.load() < 250) lastHitPaint = juce::Time::getMillisecondCounter(); }
     void chooseFile (const juce::String& title, const juce::String& pattern, bool save, std::function<void (juce::File)> cb)
     {
@@ -958,6 +1446,21 @@ private:
     juce::TextButton loadKitB, saveKitB, defaultB, sliceB, toMidiB, seqB, clearB, humanB, loadSmpB, revB, syncB, muteB, soloB;
     juce::ComboBox lenBox, rateBox, chokeBox;
     juce::Slider gainK, panK, tuneK, fineK, atkK, decK, dlyK, swingK, masterK;
+    juce::Slider busF[beat::numBuses], fxF, peAmtK, peD1K, peBrkK, peD2K, fCutK, fResK, fGainK;
+    juce::OwnedArray<juce::TextButton> laneTabs, fTypeB, fSlopeB; juce::ComboBox busBox;
+    int lane = -1, hoverStep = -1, lastLaneStep = -1, lastLaneVal = 64;
+public:
+    void demoLanes()   // skrinshot uchun: cutoff lane egri, filtr va pitch env namunasi
+    {
+        sel = 0;
+        for (int st = 0; st < plugin.length(); ++st) plugin.setLane (0, beat::laneCut, st, 40 + (int) (80 * (0.5 + 0.5 * std::sin (st * 0.45))));
+        auto v = plugin.pad (0); v.setProperty ("f_type", 1, nullptr); v.setProperty ("f_slope", 2, nullptr); v.setProperty ("f_cut", 1800.0, nullptr); v.setProperty ("f_res", 0.45, nullptr);
+        v.setProperty ("pe_amt", 18.0, nullptr); v.setProperty ("pe_d1", 40.0, nullptr); v.setProperty ("pe_brk", 0.35, nullptr); v.setProperty ("pe_d2", 260.0, nullptr); v.setProperty ("bus", 1, nullptr);
+        plugin.pad (2).setProperty ("bus", 2, nullptr); plugin.pad (3).setProperty ("bus", 3, nullptr);
+        refresh(); setLaneForTest (beat::laneCut);
+    }
+    void setLaneForTest (int l) { laneTabs[l + 1]->setToggleState (true, juce::sendNotification); lane = l; repaint(); }
+private:
     juce::TextButton normB, prevB, nextB;
     std::map<juce::String, sync::Match> matchCache; juce::String matchText; int matchScore = 2;
     juce::ValueTree copied; juce::String info;

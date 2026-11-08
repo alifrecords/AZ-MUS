@@ -515,8 +515,9 @@ inline int runSelfTest (const juce::StringArray& args)
         for (auto* t : te::getAudioTracks (*a7->edit)) a7->edit->deleteTrack (t);
         auto* bt = az::addBeatTrack (*a7);
         auto* bp = bt ? az::beatPluginOf (*bt) : nullptr;
-        check (bt != nullptr && bt->getName() == "AZ BEAT" && bp != nullptr && juce::File (bp->pad (0)["file"].toString()).existsAsFile() && juce::File (bp->pad (15)["file"].toString()).existsAsFile(),
-               "AZ BEAT treki: 16 padli standart kit yuklandi");
+        check (bt != nullptr && bt->getName() == "AZ BEAT" && bp != nullptr && juce::File (bp->pad (0)["file"].toString()).existsAsFile() && juce::File (bp->pad (15)["file"].toString()).existsAsFile()
+               && az::beat::numPads == 20 && juce::File (bp->pad (19)["file"].toString()).existsAsFile(),
+               "AZ BEAT treki: 20 padli standart kit yuklandi (4x5, C1-G2)");
         int hits = 0; for (int p = 0; p < 16; ++p) for (int st = 0; st < 16; ++st) hits += bp && bp->stepVel (p, st) > 0 ? 1 : 0;
         check (hits >= 10 && bp->stepRatchet (3, 15) == 3, "AZ BEAT: boshlang'ich pattern (kick/clap/hat + ratchet x3)");
         a7->edit->getTransport().setLoopRange ({ te::TimePosition(), te::TimePosition::fromSeconds (4.8) });
@@ -684,7 +685,7 @@ inline int runSelfTest (const juce::StringArray& args)
         writeTone (sdir.getChildFile ("Pad_Loop_120bpm_Am.wav"), 220, 0.3f, 8.0, false);
 
         auto* bt = az::addBeatTrack (*a10); auto* bp = az::beatPluginOf (*bt);
-        for (int p = 0; p < 16; ++p) { bp->pad (p).setProperty ("steps", juce::String::repeatedString ("0,", 64), nullptr); bp->clearPad (p); }
+        for (int p = 0; p < az::beat::numPads; ++p) { bp->pad (p).setProperty ("steps", juce::String::repeatedString ("0,", 64), nullptr); bp->clearPad (p); }
         bp->loadSample (0, quiet); bp->setStep (0, 4, 127);          // 4-step = 0.5 s
         bt->insertMIDIClip (te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (2.0)), nullptr);
         auto renderInfo = [&] (const char* name, float& rms, double& onset)
@@ -903,6 +904,132 @@ inline int runSelfTest (const juce::StringArray& args)
             check (rmsR > rmsL - 3 && silent == 0, "Kesilgan bo'lak ovozi yo'qolmagan (chap bo'lak bilan bir xil darajada)");
         }
         mc13.reset();
+    }
+
+
+    // ================= 0.10: AZ BEAT · Nerve lane'lari · Battery Buses / Pitch Envelope / Filter-EQ
+    {
+        auto a14 = std::make_unique<az::AppEngine>(); a14->newProject (dir.getChildFile ("t10.azmus"));
+        auto& e14 = *a14->edit; e14.tempoSequence.getTempo (0)->setBpm (120.0);
+        for (auto* t : te::getAudioTracks (e14)) e14.deleteTrack (t);
+        auto sdir = dir.getChildFile ("smp10"); sdir.deleteRecursively(); sdir.createDirectory();
+        auto writeBuf = [&] (const juce::File& f, std::function<float (int, int)> gen, double dur)
+        {
+            const int sr = 48000, n = (int) (sr * dur); juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i) { const float v = gen (i, sr); b.setSample (0, i, v); b.setSample (1, i, v); }
+            juce::WavAudioFormat wav;
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n);
+        };
+        juce::Random rnd (1234);
+        const auto noiseF = sdir.getChildFile ("noise.wav"), sineF = sdir.getChildFile ("sine440.wav");
+        writeBuf (noiseF, [&] (int, int) { return (rnd.nextFloat() * 2 - 1) * 0.3f; }, 0.25);
+        writeBuf (sineF, [] (int i, int sr) { return 0.4f * std::sin ((float) (juce::MathConstants<double>::twoPi * 440.0 * i / sr)); }, 0.30);
+        auto* bt = az::addBeatTrack (*a14); auto* bp = az::beatPluginOf (*bt);
+        for (int p = 0; p < az::beat::numPads; ++p) { bp->pad (p).setProperty ("steps", juce::String::repeatedString ("0,", 64), nullptr); bp->clearPad (p); }
+        bt->insertMIDIClip (te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (2.0)), nullptr);
+        auto setup = [&] (const juce::File& f)
+        {
+            auto v = bp->pad (0);
+            for (auto* l : az::beat::laneIds) v.removeProperty (l, nullptr);
+            for (auto [k, d] : std::initializer_list<std::pair<const char*, double>> { { "pe_amt", 0 }, { "pe_d1", 60 }, { "pe_brk", 0.3 }, { "pe_d2", 300 }, { "f_type", 0 }, { "f_slope", 1 },
+                                                                                        { "f_cut", 20000 }, { "f_res", 0.1 }, { "f_gain", 0 }, { "bus", 0 }, { "decay", 0 }, { "attack", 0 } })
+                v.setProperty (k, d, nullptr);
+            for (int b = 1; b <= 4; ++b) bp->state.setProperty ("bus" + juce::String (b), 0.0, nullptr);
+            bp->state.setProperty ("fxReturn", -6.0, nullptr);
+            bp->loadSample (0, f); bp->setStep (0, 4, 127);                     // 4-step = 0.5 s
+            bp->rebuildForTest();
+        };
+        int nr = 0; int SR = 48000;
+        auto render = [&] (juce::AudioBuffer<float>& b)
+        {
+            const auto f = dir.getChildFile ("b10_" + juce::String (++nr) + ".wav"); a14->exportWav (f, 32);
+            double sr = 48000; az::dop::readFile (a14->engine, f, b, sr); SR = (int) sr;
+        };
+        auto rmsDb = [&] (const juce::AudioBuffer<float>& b, double t0, double t1) { return juce::Decibels::gainToDecibels (b.getRMSLevel (0, (int) (t0 * SR), (int) ((t1 - t0) * SR)), -200.0f); };
+        auto hfRatioDb = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)   // birinchi farq energiyasi / signal energiyasi
+        {
+            double e = 0, d = 0; for (int i = (int) (t0 * SR) + 1; i < (int) (t1 * SR); ++i) { const float x = b.getSample (0, i), y = b.getSample (0, i - 1); e += x * x; d += (x - y) * (x - y); }
+            return 10.0 * std::log10 ((d + 1e-12) / (e + 1e-12));
+        };
+        auto onsetT = [&] (const juce::AudioBuffer<float>& b) { for (int i = 0; i < b.getNumSamples(); ++i) if (std::abs (b.getSample (0, i)) > 0.003f) return (double) i / SR; return -1.0; };
+        auto endT = [&] (const juce::AudioBuffer<float>& b, double t0, double t1) { double e = -1; for (int i = (int) (t0 * SR); i < (int) (t1 * SR); ++i) if (std::abs (b.getSample (0, i)) > 0.003f) e = (double) i / SR; return e; };
+        auto zcrHz = [&] (const juce::AudioBuffer<float>& b, double t0, double t1)
+        {
+            int z = 0; for (int i = (int) (t0 * SR) + 1; i < (int) (t1 * SR); ++i) if ((b.getSample (0, i - 1) < 0) != (b.getSample (0, i) < 0)) ++z;
+            return z / 2.0 / (t1 - t0);
+        };
+        juce::AudioBuffer<float> base, x;
+        // --- noise: baza
+        setup (noiseF); render (base);
+        const double hf0 = hfRatioDb (base, 0.52, 0.72), r0 = rmsDb (base, 0.52, 0.72), on0 = onsetT (base), end0 = endT (base, 0.5, 1.2);
+        std::printf ("       baza: onset %.4f s, oxiri %.3f s, RMS %.1f dB, HF %.1f dB\n", on0, end0, r0, hf0);
+        // cutoff lane
+        bp->setLane (0, az::beat::laneCut, 4, 20); bp->rebuildForTest(); render (x);
+        const double hfCut = hfRatioDb (x, 0.52, 0.72);
+        std::printf ("       cutoff lane 20: HF %.1f dB (baza %.1f)\n", hfCut, hf0);
+        check (hfCut < hf0 - 12, "Nerve 'cutoff' lane: step filtri yuqori chastotalarni pasaytiradi");
+        // resonance lane (cutoff past + reso baland -> rezonans cho'qqisi: RMS ko'tariladi)
+        bp->setLane (0, az::beat::laneRes, 4, 120); bp->rebuildForTest(); render (base);   // base o'rniga vaqtincha
+        const double rRes = rmsDb (base, 0.52, 0.72); setup (noiseF); bp->setLane (0, az::beat::laneCut, 4, 20); bp->rebuildForTest(); render (x);
+        const double rNoRes = rmsDb (x, 0.52, 0.72);
+        std::printf ("       resonance lane: RMS %.1f dB (reso yo'q: %.1f dB)\n", rRes, rNoRes);
+        check (rRes > rNoRes + 3, "Nerve 'resonance' lane: rezonans cho'qqisi qo'shiladi");
+        // gate
+        setup (noiseF); bp->setLane (0, az::beat::laneGate, 4, 32); bp->rebuildForTest(); render (x);
+        const double endG = endT (x, 0.5, 1.2);
+        std::printf ("       gate lane 32: oxiri %.3f s (baza %.3f s)\n", endG, end0);
+        check (end0 > 0.72 && endG > 0.5 && endG < 0.6, "Nerve 'gate' lane: zarba qisqaradi");
+        // late
+        setup (noiseF); bp->setLane (0, az::beat::laneLate, 4, 127); bp->rebuildForTest(); render (x);
+        const double onL = onsetT (x);
+        std::printf ("       late lane 127: onset %.4f s (baza %.4f)\n", onL, on0);
+        check (std::abs (on0 - 0.5) < 0.003 && std::abs (onL - 0.5625) < 0.004, "Nerve 'late' lane: step yarim stepgacha kechikadi (62.5 ms)");
+        // fx send -> reverb dumi
+        setup (noiseF); bp->setLane (0, az::beat::laneFx, 4, 127); bp->rebuildForTest(); render (x);
+        const double tail0 = rmsDb (base.getNumSamples() > 0 ? x : x, 0.85, 1.3);
+        juce::AudioBuffer<float> dry; setup (noiseF); render (dry);
+        const double tailDry = rmsDb (dry, 0.85, 1.3);
+        std::printf ("       fx send 127: dum %.1f dB (quruq %.1f dB)\n", tail0, tailDry);
+        check (tail0 > -70 && tail0 > tailDry + 30, "Nerve 'fx send' lane: FX shinasiga (reverb) yuboradi");
+        // pan
+        setup (noiseF); bp->setLane (0, az::beat::lanePan, 4, 0); bp->rebuildForTest(); render (x);
+        const double rl = juce::Decibels::gainToDecibels (x.getRMSLevel (0, (int) (0.52 * SR), SR / 5), -200.0f), rr = juce::Decibels::gainToDecibels (x.getRMSLevel (1, (int) (0.52 * SR), SR / 5), -200.0f);
+        std::printf ("       pan lane 0: L %.1f dB, R %.1f dB\n", rl, rr);
+        check (rl > rr + 30, "Nerve 'pan' lane: chapga suradi");
+        // Buses
+        setup (noiseF); bp->pad (0).setProperty ("bus", 2, nullptr); bp->state.setProperty ("bus2", -12.0, nullptr); bp->rebuildForTest(); render (x);
+        const double rBus = rmsDb (x, 0.52, 0.72);
+        bp->state.setProperty ("bus2", -60.0, nullptr); bp->rebuildForTest(); render (x);
+        const double rBusM = rmsDb (x, 0.52, 0.72);
+        bp->state.setProperty ("bus2", 0.0, nullptr); bp->state.setProperty ("bus1", -60.0, nullptr); bp->rebuildForTest(); render (x);
+        const double rBusO = rmsDb (x, 0.52, 0.72);
+        std::printf ("       Bus 2: -12 dB -> %.1f dB (baza %.1f), -60 dB -> %.1f dB, Bus1 o'zgarsa -> %.1f dB\n", rBus, r0, rBusM, rBusO);
+        check (std::abs (rBus - (r0 - 12)) < 0.6 && rBusM < r0 - 50 && std::abs (rBusO - r0) < 0.3, "Battery Buses: pad Bus 2 ga yo'naltiriladi, shina faderi ishlaydi");
+        // Filter / EQ
+        setup (noiseF); bp->pad (0).setProperty ("f_type", 1, nullptr); bp->pad (0).setProperty ("f_slope", 2, nullptr); bp->pad (0).setProperty ("f_cut", 400.0, nullptr); bp->rebuildForTest(); render (x);
+        const double hfLP4 = hfRatioDb (x, 0.52, 0.72);
+        bp->pad (0).setProperty ("f_slope", 0, nullptr); bp->rebuildForTest(); render (x);
+        const double hfLP1 = hfRatioDb (x, 0.52, 0.72);
+        bp->pad (0).setProperty ("f_type", 2, nullptr); bp->pad (0).setProperty ("f_slope", 2, nullptr); bp->pad (0).setProperty ("f_cut", 6000.0, nullptr); bp->rebuildForTest(); render (x);
+        const double hfHP = hfRatioDb (x, 0.52, 0.72);
+        bp->pad (0).setProperty ("f_type", 1, nullptr); bp->pad (0).setProperty ("f_cut", 20000.0, nullptr); bp->pad (0).setProperty ("f_gain", -6.0, nullptr); bp->rebuildForTest(); render (x);
+        const double rGain = rmsDb (x, 0.52, 0.72);
+        std::printf ("       Filter: LP 4P %.1f dB, LP 1P %.1f dB, HP 4P %.1f dB (baza HF %.1f), Gain -6 -> RMS %.1f (baza %.1f)\n", hfLP4, hfLP1, hfHP, hf0, rGain, r0);
+        check (hfLP4 < hfLP1 - 6 && hfLP1 < hf0 - 6 && hfHP > hf0 + 1 && std::abs (rGain - (r0 - 6)) < 1.0, "Battery Filter/EQ: LP/HP, 1P/2P/4P qiyaligi va Gain");
+        // sine: pitch lane va Pitch Envelope
+        setup (sineF); render (x); const double z0 = zcrHz (x, 0.52, 0.72);
+        bp->setLane (0, az::beat::lanePitch, 4, 127); bp->rebuildForTest(); render (x); const double zP = zcrHz (x, 0.51, 0.6);
+        setup (sineF); bp->pad (0).setProperty ("pe_amt", 12.0, nullptr); bp->pad (0).setProperty ("pe_d1", 30.0, nullptr); bp->pad (0).setProperty ("pe_d2", 40.0, nullptr); bp->rebuildForTest(); render (x);
+        const double zE1 = zcrHz (x, 0.5005, 0.5125), zE2 = zcrHz (x, 0.66, 0.70);
+        std::printf ("       pitch: baza %.0f Hz, pitch lane 127 -> %.0f Hz; Pitch Env +12: boshi %.0f Hz, oxiri %.0f Hz\n", z0, zP, zE1, zE2);
+        check (std::abs (z0 - 440) < 15 && std::abs (zP - 880) < 30, "Nerve 'pitch' lane: +12 st (bir oktava)");
+        check (zE1 > 700 && std::abs (zE2 - 440) < 40, "Battery Pitch Envelope: Amount/Decay 1/Break/Decay 2");
+        // muharrir: 20 pad, 8 lane tab, katta oyna
+        {
+            az::BeatEditor ed (*bp); ed.setLaneForTest (az::beat::laneCut);
+            int padsOk = 0; for (int p = 0; p < az::beat::numPads; ++p) padsOk += ed.getLocalBounds().toFloat().contains (ed.padRect (p)) ? 1 : 0;
+            check (bp->padPos[5].load() < 0 && ed.getWidth() == 1240 && ed.getHeight() == 888 && padsOk == 20 && ed.padRect (0).getY() > ed.padRect (19).getY(), "AZ BEAT muharriri: 20 pad (4x5), Nerve lane tablari, Buses/Pitch Env/Filter panellari");
+        }
     }
 
     app2.reset(); app.reset();
