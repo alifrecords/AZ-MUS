@@ -10,8 +10,48 @@ using namespace std::literals;
 
 namespace az
 {
-    const juce::Colour bg0 { 0xff07070a }, bg1 { 0xff0d0c0f }, bg2 { 0xff121116 }, bg3 { 0xff17151b };
-    const juce::Colour red { 0xffff3347 }, redHot { 0xffff2a3d }, redSoft { 0xffff8a95 }, redDeep { 0xff9a1020 };
+    // Mavzu (tema) ranglari: o'zgaruvchan — applyTheme() bilan almashtiriladi (0 = AZ Qizil, 1 = Indigo)
+    inline juce::Colour bg0 { 0xff07070a }, bg1 { 0xff0d0c0f }, bg2 { 0xff121116 }, bg3 { 0xff17151b };
+    inline juce::Colour red { 0xffff3347 }, redHot { 0xffff2a3d }, redSoft { 0xffff8a95 }, redDeep { 0xff9a1020 };
+    inline const juce::Colour recRed { 0xffff3347 };      // yozish tugmasi — har doim qizil
+    inline int themeId = 0;
+    inline constexpr int numThemes = 2;
+    inline const char* themeName (int t) { return t == 1 ? "Indigo" : "AZ Qizil"; }
+    inline void applyTheme (int t)
+    {
+        themeId = juce::jlimit (0, numThemes - 1, t);
+        if (themeId == 1)
+        {   // Indigo (ko'k-binafsha): "Peace · Security · Reliability"
+            bg0 = juce::Colour (0xff07080e); bg1 = juce::Colour (0xff0c0e17); bg2 = juce::Colour (0xff12141f); bg3 = juce::Colour (0xff181b2a);
+            red = juce::Colour (0xff5a62e8); redHot = juce::Colour (0xff4c55e6); redSoft = juce::Colour (0xffaab0ff); redDeep = juce::Colour (0xff272b8c);
+        }
+        else
+        {
+            bg0 = juce::Colour (0xff07070a); bg1 = juce::Colour (0xff0d0c0f); bg2 = juce::Colour (0xff121116); bg3 = juce::Colour (0xff17151b);
+            red = juce::Colour (0xffff3347); redHot = juce::Colour (0xffff2a3d); redSoft = juce::Colour (0xffff8a95); redDeep = juce::Colour (0xff9a1020);
+        }
+    }
+    // bo'rtma (3D) panel: yuqorida yorug' qirra, pastda soya, ustida glyans
+    inline void embossPanel (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour base, float rad)
+    {
+        using namespace juce;
+        g.setColour (Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (r.translated (0, 3).expanded (1), rad + 1);
+        g.setGradientFill (ColourGradient (base.brighter (0.35f), 0, r.getY(), base.darker (0.55f), 0, r.getBottom(), false));
+        g.fillRoundedRectangle (r, rad);
+        g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.26f), 0, r.getY(), Colours::white.withAlpha (0.0f), 0, r.getCentreY(), false));
+        g.fillRoundedRectangle (r.reduced (2).withHeight (r.getHeight() * 0.48f), rad - 1);
+        g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.55f), 0, r.getY(), Colours::white.withAlpha (0.0f), 0, r.getY() + r.getHeight() * 0.4f, false));
+        g.drawRoundedRectangle (r.reduced (1.0f), rad - 0.5f, 1.2f);
+        g.setColour (base.darker (0.9f)); g.drawRoundedRectangle (r, rad, 1.0f);
+    }
+    // botiq (ichkariga kirgan) joy — panel ichidagi displey uchun
+    inline void insetWell (juce::Graphics& g, juce::Rectangle<float> r, float rad)
+    {
+        using namespace juce;
+        g.setColour (Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (r.expanded (2.5f), rad + 2.5f);
+        g.setGradientFill (ColourGradient (Colours::black.withAlpha (0.0f), 0, r.getCentreY(), Colours::white.withAlpha (0.35f), 0, r.getBottom() + 3, false));
+        g.drawRoundedRectangle (r.expanded (2.5f), rad + 2.5f, 1.2f);
+    }
     const juce::Colour text { 0xffe9e6e6 }, dim { 0xff8d8587 }, dim2 { 0xff5d5759 }, silver { 0xffcfc8c9 };
     const juce::Colour green { 0xff3ddc97 }, yellow { 0xffffc04a }, blue { 0xff8ab4ff }, violet { 0xffb98aff };
     const juce::Colour line = juce::Colours::white.withAlpha (0.06f);
@@ -65,7 +105,8 @@ namespace az
     class LookAndFeel : public juce::LookAndFeel_V4
     {
     public:
-        LookAndFeel()
+        LookAndFeel() { applyColours(); }
+        void applyColours()
         {
             using namespace juce;
             setColourScheme ({ bg1, bg0, bg2, Colour (0xff2a2629), text, red, Colours::white, bg2, text });
@@ -179,6 +220,25 @@ namespace az
             const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"])
                            : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : red;
             const float rad = b.getProperties().getWithDefault ("radius", 7.0f);
+            if (b.getProperties()["emboss"])
+            {   // bo'rtma 3D tugma (transport paneli)
+                const bool pressed = down || on;
+                const auto base = red.darker (0.15f);
+                g.setColour (Colours::black.withAlpha (pressed ? 0.25f : 0.45f)); g.fillRoundedRectangle (r.translated (0, pressed ? 0.5f : 1.5f), rad);
+                g.setGradientFill (pressed ? ColourGradient (base.darker (0.6f), 0, r.getY(), base.darker (0.1f), 0, r.getBottom(), false)
+                                           : ColourGradient (base.brighter (over ? 0.5f : 0.35f), 0, r.getY(), base.darker (0.45f), 0, r.getBottom(), false));
+                g.fillRoundedRectangle (r, rad);
+                if (! pressed)
+                {
+                    g.setGradientFill (ColourGradient (Colours::white.withAlpha (0.30f), 0, r.getY(), Colours::white.withAlpha (0.0f), 0, r.getCentreY(), false));
+                    g.fillRoundedRectangle (r.reduced (1.5f).withHeight (r.getHeight() * 0.45f), rad - 1);
+                }
+                g.setColour (pressed ? Colours::black.withAlpha (0.45f) : Colours::white.withAlpha (0.35f));
+                g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + rad * 0.6f, r.getRight() - rad * 0.6f);
+                g.setColour (base.darker (1.0f)); g.drawRoundedRectangle (r, rad, 1.0f);
+                if (on) { g.setColour (acc.withAlpha (0.35f)); g.drawRoundedRectangle (r.reduced (1.5f), rad - 1, 1.5f); }
+                return;
+            }
             g.setColour (on ? acc.withAlpha (0.16f) : Colours::white.withAlpha (down ? 0.09f : over ? 0.06f : 0.03f));
             g.fillRoundedRectangle (r, rad);
             g.setColour (on ? acc.withAlpha (0.55f) : Colours::white.withAlpha (0.08f));
@@ -192,6 +252,7 @@ namespace az
             const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"])
                            : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : redSoft;
             auto c = on ? acc.brighter (0.3f) : silver;
+            if (b.getProperties()["emboss"]) c = on ? acc.brighter (0.6f) : Colours::white.withAlpha (0.94f);
             if (! b.isEnabled()) c = c.withAlpha (0.35f);
             const auto t = b.getButtonText();
             if (auto icon = drawIcon (g, t, b.getLocalBounds().toFloat(), c)) return;

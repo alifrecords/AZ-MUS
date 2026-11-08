@@ -93,6 +93,7 @@ public:
         top.loopB.onClick  = [this] { toggleLoop(); };
         top.clickB.onClick = [this] { if (app.edit) { app.edit->clickTrackEnabled = ! app.edit->clickTrackEnabled; refreshAll(); } };
         top.onLanguage = [this] (int l) { setLanguage (l); };
+        top.onTheme = [this] { if (onThemeToggle) onThemeToggle(); };
         top.onTogglePanel = [this] (int p) { togglePanel (p); };
 
         lanes.onOpenPianoRoll = [this] (te::MidiClip& c) { openPianoRoll (c); };
@@ -160,7 +161,7 @@ public:
         if (mixerWindow) { mixerWindow->clearContentComponent(); mixerWindow.reset(); }
     }
     // Bosh sahifa bilan aloqa (MainWindow o'rnatadi)
-    std::function<void()> onRequestNew, onRequestHome;
+    std::function<void()> onRequestNew, onRequestHome, onThemeToggle;
     std::function<void (juce::File)> onRequestOpen;
     // Bosh sahifa kartasi uchun: aranjirovka surati + BPM/tonallik/uzunlik
     void saveProjectSnapshot()
@@ -324,7 +325,7 @@ public:
         mixer.rebuild(); inspector.refresh();
         if (lanes.getWidth() > 100) zoomToFit();
         refreshAll();
-        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->setName ("AZ MUS  \xc2\xb7  " + app.editFile.getFileNameWithoutExtension());
+        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->setName (juce::String::fromUTF8 ("AZ MUS  \xc2\xb7  ") + app.editFile.getFileNameWithoutExtension());
     }
 
     // ---------------------------------------------------------------- layout
@@ -808,6 +809,7 @@ public:
     }
     std::function<void (int)> onUiZoom;
     Lanes& getLanes() { return lanes; }
+    TopBar& getTopBar() { return top; }
     ViewState& getViewState() { return vs; }
     Mixer& getMixer() { return mixer; }
     MediaBrowser& getMedia() { return media; }

@@ -6,6 +6,14 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.13.0: Ikkinchi mavzu (Indigo) · bo'rtma 3D transport paneli
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Mavzu (tema) | UZ / RU / EN yonidagi tugma: AZ Qizil ⇄ Indigo (ko'k-binafsha). Tanlov saqlanadi, loyiha ochiq qoladi |
+| Transport paneli | Tugmalar va pozitsiya displeyi bo'rtma 3D panelda: yuqorida yorug' qirra, glyans, soya; tugmalar bosilganda ichkariga kiradi; displey botiq. Rang — mavzu rangi (qizil / indigo) |
+| Tuzatish | Oyna sarlavhasidagi "Â·" belgisi to'g'rilandi |
+
 ## 0.12.0: AZ BEAT — pad mikseri · nomlar · Battery uslubidagi envelope
 
 | Bo'lim | Nima qilindi |

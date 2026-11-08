@@ -341,15 +341,19 @@ class TopBar : public juce::Component
 public:
     static constexpr int menuH = 26, barH = 58;
     std::function<void (int)> onLanguage, onTogglePanel, onUiZoom;
+    std::function<void()> onTheme;
     float uiScale = 1.0f;
 
     TopBar (AppEngine& a, juce::MenuBarModel* model) : app (a), menu (model), lcd (a), tempo (a)
     {
         addAndMakeVisible (menu); addAndMakeVisible (lcd); addAndMakeVisible (tempo);
         iconButton (startB, "#start", "Boshiga (Home / Num .)"); iconButton (rewB, "#rew", "Orqaga (Num -)"); iconButton (ffB, "#ff", "Oldinga (Num +)");
-        iconButton (stopB, "#stop", "To'xtatish (Num 0)"); iconButton (playB, "#play", "Ijro (Space / Enter)", green); iconButton (recB, "#rec", "Yozish (R / Num *)", red);
+        iconButton (stopB, "#stop", "To'xtatish (Num 0)"); iconButton (playB, "#play", "Ijro (Space / Enter)", green); iconButton (recB, "#rec", "Yozish (R / Num *)", recRed);
         iconButton (loopB, "#loop", "Loop (L / Num /)"); iconButton (clickB, "#click", "Metronom (C)");
-        for (auto* b : { &startB, &rewB, &ffB, &stopB, &playB, &recB, &loopB, &clickB }) addAndMakeVisible (b);
+        for (auto* b : { &startB, &rewB, &ffB, &stopB, &playB, &recB, &loopB, &clickB }) { addAndMakeVisible (b); b->getProperties().set ("emboss", true); b->getProperties().set ("radius", 6.0f); }
+        addAndMakeVisible (themeB); themeB.getProperties().set ("radius", 5.0f);
+        themeB.setTooltip (U ("Mavzu (tema): AZ Qizil â Indigo"));
+        themeB.onClick = [this] { if (onTheme) onTheme(); };
         const char* langs[] = { "UZ", "RU", "EN" };
         for (int i = 0; i < 3; ++i)
         {
@@ -383,6 +387,7 @@ public:
         r = r.reduced (14, 0);
         r.removeFromLeft (172);                                   // logotip
         for (auto* b : langB) { b->setBounds (r.removeFromLeft (30).withSizeKeepingCentre (30, 24)); r.removeFromLeft (3); }
+        r.removeFromLeft (3); themeB.setBounds (r.removeFromLeft (30).withSizeKeepingCentre (30, 24));
         r.removeFromLeft (14);
         const bool narrow = getWidth() < 1400;
         cpuW = narrow ? 0 : 158;
@@ -410,6 +415,20 @@ public:
         g.setFont (font (17, 700, 0.08f)); g.setColour (text); g.drawText ("AZ", Rectangle<float> (58, cy - 19, 40, 20), Justification::centredLeft);
         g.setColour (red); g.drawText ("MUS", Rectangle<float> (58 + textWidth (font (17, 700, 0.08f), "AZ "), cy - 19, 60, 20), Justification::centredLeft);
         g.setColour (dim); g.setFont (font (8, 500, 0.26f)); g.drawText ("AZIMXODJAYEV MUSIC", Rectangle<float> (58, cy + 2, 130, 12), Justification::centredLeft);
+        // transport paneli: bo'rtma 3D, mavzu rangida
+        {
+            auto pr = startB.getBounds().getUnion (lcd.getBounds()).toFloat().expanded (9, 5);
+            embossPanel (g, pr, red, 10);
+            insetWell (g, lcd.getBounds().toFloat(), 10);
+        }
+        // mavzu tugmasi ikonkasi: ikki rang (joriy mavzu chap tomonda)
+        {
+            auto tb = themeB.getBounds().toFloat().reduced (7, 6);
+            const Colour a (0xffff3347), b (0xff5a62e8);
+            Path l, rr; l.addTriangle (tb.getTopLeft(), tb.getTopRight(), tb.getBottomLeft()); rr.addTriangle (tb.getTopRight(), tb.getBottomRight(), tb.getBottomLeft());
+            g.setColour (themeId == 0 ? a : b); g.fillPath (l);
+            g.setColour (themeId == 0 ? b : a); g.fillPath (rr);
+        }
         if (cpuW > 0)
         {
             const float x = (float) getWidth() - 14 - (float) cpuW + 8;
@@ -435,7 +454,7 @@ public:
         clickB.setToggleState (app.edit->clickTrackEnabled, juce::dontSendNotification);
         lcd.repaint(); tempo.repaint(); if (cpuW > 0) repaint (getWidth() - cpuW - 20, menuH, cpuW + 20, barH);
     }
-    juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB, pInsp, pMedia, pMix, zoomOutB, zoomInB;
+    juce::TextButton startB, rewB, ffB, stopB, playB, recB, loopB, clickB, pInsp, pMedia, pMix, zoomOutB, zoomInB, themeB;
     LcdDisplay& getLcd() { return lcd; }
     TempoBox& getTempo() { return tempo; }
 private:

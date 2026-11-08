@@ -1123,6 +1123,17 @@ inline int runSelfTest (const juce::StringArray& args)
             hb.showNewDialog (2);
             check (hb.isNewDialogVisible(), "Hub: Yangi loyiha oynasi (nom, BPM, tonallik, shablon)");
         }
+        // mavzu (tema): Indigo va qaytish; transport tugmalari bo'rtma
+        {
+            ah->newProject (dir.getChildFile ("theme.azmus"));
+            az::applyTheme (1); const bool ind = az::red == juce::Colour (0xff5a62e8) && az::bg2 == juce::Colour (0xff12141f);
+            bool emb = false;
+            { auto mc = std::make_unique<az::MainComponent> (*ah); mc->setSize (1400, 860); juce::Image im (juce::Image::ARGB, 1400, 860, true); juce::Graphics gg (im); mc->paintEntireComponent (gg, false);
+              emb = (bool) mc->getTopBar().playB.getProperties()["emboss"]; }
+            az::applyTheme (0); const bool back = az::red == juce::Colour (0xffff3347);
+            check (ind && back && emb && az::recRed == juce::Colour (0xffff3347), "Mavzu: AZ Qizil / Indigo almashadi; transport paneli bo'rtma 3D");
+            ah->closeProject();
+        }
         // 3) shablon: Aranjirovka
         {
             ah->newProject (dir.getChildFile ("tpl.azmus")); az::hub::applyTemplate (*ah, 2);

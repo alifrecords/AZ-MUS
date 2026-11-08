@@ -217,9 +217,20 @@ public:
         zh->main.onRequestHome = [this] { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this)] { if (sp) sp->switchProject ({}); }); };
         zh->main.onRequestNew  = [this] { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this)] { if (sp) { sp->switchProject ({}); if (auto* h = sp->hub()) h->showNewDialog (0); } }); };
         zh->main.onRequestOpen = [this] (juce::File f) { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this), f] { if (sp) sp->switchProject ([p = sp.getComponent(), f] { return p->app.openProject (f); }); }); };
+        zh->main.onThemeToggle = [this] { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this)] { if (sp) sp->toggleTheme(); }); };
         setContentOwned (zh, false);
         zh->main.editChanged();
         juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<az::MainComponent> (&zh->main)] { if (sp) sp->grabKeyboardFocus(); });
+    }
+    // mavzu (tema): ranglarni almashtirib, oyna tarkibini qayta quradi (loyiha ochiq qoladi)
+    void toggleTheme (int forced = -1)
+    {
+        az::applyTheme (forced >= 0 ? forced : (az::themeId + 1) % az::numThemes);
+        app.engine.getPropertyStorage().getPropertiesFile().setValue ("azTheme", az::themeId);
+        if (auto* l = dynamic_cast<az::LookAndFeel*> (&juce::LookAndFeel::getDefaultLookAndFeel())) l->applyColours();
+        if (projectHost() != nullptr) { clearContentComponent(); showProject(); }
+        else if (hub() != nullptr) { clearContentComponent(); showHub(); }
+        for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i) juce::Desktop::getInstance().getComponent (i)->repaint();
     }
     // xavfsiz almashish: 1) surat + saqlash, 2) loyiha UI'sini yo'q qilish, 3) Edit'ni yopish, 4) yangisini ochish
     void switchProject (std::function<bool()> loader)
@@ -360,6 +371,8 @@ private:
                 if (args.contains ("--demo")) makeDemo (*app);
                 if (args.contains ("--playlistdir")) az::hub::playlistBase() = args[args.indexOf ("--playlistdir") + 1] + "/";
                 if (args.contains ("--mm")) if (auto* m = az::Routing (*app).monitorMatch (true)) { m->source = 1; m->target = 0; }   // test: A8X → Focal
+                az::applyTheme (args.contains ("--theme") ? args[args.indexOf ("--theme") + 1].getIntValue() : app->engine.getPropertyStorage().getPropertiesFile().getIntValue ("azTheme", 0));
+                lnf.applyColours();
                 mainWindow = std::make_unique<MainWindow> (*app, app->edit == nullptr);
                 if (auto* h = mainWindow->hub())
                 {
