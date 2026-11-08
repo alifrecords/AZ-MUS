@@ -933,7 +933,8 @@ inline int runSelfTest (const juce::StringArray& args)
             auto v = bp->pad (0);
             for (auto* l : az::beat::laneIds) v.removeProperty (l, nullptr);
             for (auto [k, d] : std::initializer_list<std::pair<const char*, double>> { { "pe_amt", 0 }, { "pe_d1", 60 }, { "pe_brk", 0.3 }, { "pe_d2", 300 }, { "f_type", 0 }, { "f_slope", 1 },
-                                                                                        { "f_cut", 20000 }, { "f_res", 0.1 }, { "f_gain", 0 }, { "bus", 0 }, { "decay", 0 }, { "attack", 0 } })
+                                                                                        { "f_cut", 20000 }, { "f_res", 0.1 }, { "f_gain", 0 }, { "bus", 0 }, { "decay", 0 }, { "attack", 0 },
+                                                                                        { "hold", 0 }, { "env_dec", 0 }, { "sustain", 1 }, { "gain", 0 } })
                 v.setProperty (k, d, nullptr);
             for (int b = 1; b <= 4; ++b) bp->state.setProperty ("bus" + juce::String (b), 0.0, nullptr);
             bp->state.setProperty ("fxReturn", -6.0, nullptr);
@@ -1030,6 +1031,7 @@ inline int runSelfTest (const juce::StringArray& args)
             auto ed = std::make_unique<az::BeatEditor> (*bp);
             juce::DocumentWindow w ("zoom", juce::Colours::black, 0, false);
             az::PluginFrame fr (*ed, w, bp);
+            fr.setZoom (1.0f);
             const int w100 = fr.getWidth(), h100 = fr.getHeight();
             fr.setZoom (1.5f); const int w150 = fr.getWidth(), h150 = fr.getHeight();
             fr.setZoom (0.3f); const float zMin = fr.getZoom();
@@ -1044,17 +1046,34 @@ inline int runSelfTest (const juce::StringArray& args)
             const float saved = (float) (double) bp->state.getProperty ("uiZoom", 0.0);
             std::printf ("       zoom: 100%% %dx%d, 150%% %dx%d, min %.2f, qadam %.2f, Ctrl+ %.2f, saqlangan %.2f, pad1 %.0f,%.0f -> %.0f,%.0f\n",
                          w100, h100, w150, h150, zMin, zStep, zKey, saved, inFrame.x, inFrame.y, back.x, back.y);
-            check (w100 == 1240 && h100 == 888 + az::PluginFrame::barH && w150 == 1860 && h150 == 1332 + az::PluginFrame::barH && std::abs (zMin - 0.5f) < 1e-3
+            check (w100 == az::BeatEditor::defaultW && h100 == az::BeatEditor::defaultH + az::PluginFrame::barH && w150 == juce::roundToInt (az::BeatEditor::defaultW * 1.5) && h150 == juce::roundToInt (az::BeatEditor::defaultH * 1.5) + az::PluginFrame::barH && std::abs (zMin - 0.5f) < 1e-3
                    && std::abs (zStep - 0.67f) < 1e-3 && key && std::abs (zKey - 1.1f) < 1e-3 && std::abs (saved - 0.75f) < 1e-3
                    && std::abs (inFrame.x - pc.x * 0.75f) < 1 && std::abs (inFrame.y - (pc.y * 0.75f + az::PluginFrame::barH)) < 1 && back.getDistanceFrom (pc) < 0.5f,
                    "AZ BEAT oynasi zoom: 50%-200%, -/+/Ctrl, saqlanadi, sichqoncha nuqtalari to'g'ri");
             fr.setZoom (1.0f);
         }
+
+        // 0.12: amp envelope (sustain), pad mikser faderi, nomlar
+        {
+            setup (sineF); render (x); const double e1 = rmsDb (x, 0.52, 0.55), l1 = rmsDb (x, 0.70, 0.75);
+            bp->pad (0).setProperty ("hold", 20.0, nullptr); bp->pad (0).setProperty ("env_dec", 30.0, nullptr); bp->pad (0).setProperty ("sustain", 0.25, nullptr);
+            bp->rebuildForTest(); render (x); const double e2 = rmsDb (x, 0.502, 0.518), l2 = rmsDb (x, 0.70, 0.75);
+            std::printf ("       amp env: boshi %.1f dB (avval %.1f), sustain qismi %.1f dB (avval %.1f)\n", e2, e1, l2, l1);
+            check (std::abs (e2 - e1) < 1.5 && std::abs ((l1 - l2) - 12.04) < 1.0, "Amp envelope: Hold -> Decay -> Sustain 25% (-12 dB)");
+            setup (noiseF);
+            az::BeatEditor ed (*bp);
+            ed.setPadFaderForTest (0, -18.0); bp->rebuildForTest(); render (x);
+            const double rF = rmsDb (x, 0.52, 0.72);
+            std::printf ("       pad mikser faderi -18 dB: %.1f dB (baza %.1f)\n", rF, r0);
+            check (std::abs ((double) bp->pad (0)["gain"] + 18.0) < 0.01 && std::abs (rF - (r0 - 18)) < 0.6, "Mikser: har pad faderi o'z sample'ining balandligini boshqaradi");
+            ed.renamePad (3, "  Hi-Hat yopiq "); ed.renameBus (2, "Barabanlar"); ed.renameBus (3, "");
+            check (bp->pad (3)["name"].toString() == "Hi-Hat yopiq" && ed.getBusName (2) == "Barabanlar" && ed.getBusName (3) == "BUS 3", "Nomlar: pad va shina nomlarini yozish / o'zgartirish");
+        }
         // muharrir: 20 pad, 8 lane tab, katta oyna
         {
             az::BeatEditor ed (*bp); ed.setLaneForTest (az::beat::laneCut);
             int padsOk = 0; for (int p = 0; p < az::beat::numPads; ++p) padsOk += ed.getLocalBounds().toFloat().contains (ed.padRect (p)) ? 1 : 0;
-            check (bp->padPos[5].load() < 0 && ed.getWidth() == 1240 && ed.getHeight() == 888 && padsOk == 20 && ed.padRect (0).getY() > ed.padRect (19).getY(), "AZ BEAT muharriri: 20 pad (4x5), Nerve lane tablari, Buses/Pitch Env/Filter panellari");
+            check (bp->padPos[5].load() < 0 && ed.getWidth() == az::BeatEditor::defaultW && ed.getHeight() == az::BeatEditor::defaultH && padsOk == 20 && ed.padRect (0).getY() > ed.padRect (19).getY(), "AZ BEAT muharriri: 20 pad (4x5), Nerve lane tablari, Buses/Pitch Env/Filter panellari");
         }
     }
 

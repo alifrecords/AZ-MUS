@@ -69,6 +69,13 @@ public:
             addMouseListener (this, true);
             baseW = content.getWidth(); baseH = content.getHeight();
             zoom = juce::jlimit (minZoom, maxZoom, (float) (double) zp->state.getProperty ("uiZoom", 1.0));
+            if (! zp->state.hasProperty ("uiZoom"))     // birinchi ochilishda: ekranga sig'adigan o'lcham
+                if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+                {
+                    const auto ua = d->userArea;
+                    const float fit = juce::jmin ((float) (ua.getWidth() - 40) / juce::jmax (1, baseW), (float) (ua.getHeight() - barH - 70) / juce::jmax (1, baseH));
+                    if (fit < 1.0f) zoom = juce::jlimit (minZoom, 1.0f, std::floor (fit * 20.0f) / 20.0f);
+                }
         }
         for (auto* b : { &playB, &stopB, &startB, &pinB })
         { addAndMakeVisible (b); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); b->getProperties().set ("radius", 5.0f); }

@@ -28,6 +28,7 @@ struct PadRT
 {
     std::shared_ptr<const juce::AudioBuffer<float>> sample; double sampleRate = 48000;
     float gain = 1, pan = 0, tune = 0, start = 0, end = 1, attackMs = 0, decayMs = 30, delayMs = 0;
+    float holdMs = 0, envDecMs = 0, sustain = 1;   // Battery amp envelope: Attack - Hold - Decay - Sustain (Release = decayMs, bo'lak oxirida)
     bool reverse = false, mute = false, solo = false; int choke = 0;
     // Battery: pitch envelope va filtr/EQ, chiqish shinasi
     float peAmt = 0, peD1 = 60, peBrk = 0.3f, peD2 = 300;
@@ -177,7 +178,8 @@ public:
         for (auto c : state) if (c.hasType (beat::PAD) && (int) c["idx"] == i) return c;
         juce::ValueTree p (beat::PAD);
         p.setProperty ("idx", i, nullptr); p.setProperty ("file", "", nullptr); p.setProperty ("name", "", nullptr);
-        for (auto [k, v] : std::initializer_list<std::pair<const char*, double>> { { "gain", 0 }, { "pan", 0 }, { "tune", 0 }, { "fine", 0 }, { "start", 0 }, { "end", 1 }, { "attack", 0 }, { "decay", 30 }, { "delay", 0 } })
+        for (auto [k, v] : std::initializer_list<std::pair<const char*, double>> { { "gain", 0 }, { "pan", 0 }, { "tune", 0 }, { "fine", 0 }, { "start", 0 }, { "end", 1 }, { "attack", 0 }, { "decay", 30 }, { "delay", 0 },
+                                                                                   { "hold", 0 }, { "env_dec", 0 }, { "sustain", 1 } })
             p.setProperty (k, v, nullptr);
         for (auto k : { "reverse", "mute", "solo", "sync", "norm" }) p.setProperty (k, false, nullptr);
         p.setProperty ("choke", 0, nullptr);
@@ -444,6 +446,8 @@ private:
             p.tune = (float) ((double) v["tune"] + (double) v["fine"] / 100.0);
             p.start = (float) (double) v["start"]; p.end = (float) (double) v["end"];
             p.attackMs = (float) (double) v["attack"]; p.decayMs = (float) (double) v["decay"];
+            p.holdMs = (float) (double) v.getProperty ("hold", 0.0); p.envDecMs = (float) (double) v.getProperty ("env_dec", 0.0);
+            p.sustain = (float) juce::jlimit (0.0, 1.0, (double) v.getProperty ("sustain", 1.0));
             p.reverse = v["reverse"]; p.mute = v["mute"]; p.solo = v["solo"]; p.choke = v["choke"];
             s->anySolo |= p.solo;
             auto st = intList (v["steps"], 0), ra = intList (v["ratchet"], 1);
@@ -486,6 +490,7 @@ private:
         bool active = false, releasing = false;
         int pad = 0, delay = 0; double pos = 0, inc = 1, a = 0, b = 0; float gl = 1, gr = 1, env = 0, atkInc = 1, relInc = 0.01f;
         int decayLen = 0; bool reverse = false;
+        double ahdA = 0, ahdH = 0, ahdD = 0; float sus = 1;   // amp envelope (namunalar, chiqish tezligida)
         // pitch envelope
         float peAmt = 0, peLevel = 1, peK1 = 0, peK2 = 0, peBrk = 0.3f; bool peStage2 = false;
         // filtr
@@ -519,6 +524,7 @@ private:
         v->atkInc = pd.attackMs > 0.1f ? 1.0f / (pd.attackMs * 0.001f * (float) outRate) : 1.0f;
         v->env = pd.attackMs > 0.1f ? 0.0f : 1.0f;
         v->decayLen = (int) (pd.decayMs * 0.001 * outRate * v->inc);
+        v->ahdA = pd.attackMs * 0.001 * outRate; v->ahdH = pd.holdMs * 0.001 * outRate; v->ahdD = pd.envDecMs * 0.001 * outRate; v->sus = pd.sustain;
         // pitch envelope (Battery): amount -> break darajasigacha decay1, keyin decay2 bilan 0 ga
         v->peAmt = pd.peAmt; v->peLevel = 1.0f; v->peStage2 = false; v->peBrk = juce::jlimit (0.0f, 1.0f, pd.peBrk);
         v->peK1 = std::exp (-1.0f / juce::jmax (1.0f, pd.peD1 * 0.001f * (float) outRate));
@@ -549,6 +555,7 @@ private:
         if (busBuf.getNumSamples() < n) return;
         busBuf.clear (0, n);
         float lastPos[beat::numPads]; for (auto& x : lastPos) x = -1;
+        float padPk[beat::numPads] {};
         juce::uint32 newest[beat::numPads] {};
         for (auto& v : voices)
         {
@@ -558,6 +565,7 @@ private:
             const int bi = juce::jlimit (0, beat::numBuses, v.bus);
             auto* L = busBuf.getWritePointer (bi * 2), *R = busBuf.getWritePointer (bi * 2 + 1);
             auto* FL = busBuf.getWritePointer (10), *FR = busBuf.getWritePointer (11);
+            float vpk = 0;
             for (int i = juce::jmax (0, v.delay); i < n; ++i)
             {
                 const int ip = (int) v.pos; const float fr = (float) (v.pos - ip);
@@ -579,9 +587,16 @@ private:
                 if (v.played > v.gateLen && ! v.releasing) { v.releasing = true; v.relInc = 1.0f / (0.006f * (float) outRate); }
                 if (v.env < 1.0f && ! v.releasing) v.env = juce::jmin (1.0f, v.env + v.atkInc);
                 if (v.releasing) { v.env -= v.relInc > 0 ? v.relInc : 0.01f; if (v.env <= 0) { v.active = false; break; } }
-                const float g = v.env * fade;
+                float ahd = 1.0f;
+                if (v.sus < 0.999f)
+                {
+                    const double t = v.played - v.ahdA - v.ahdH;
+                    if (t > 0) ahd = v.ahdD > 1 && t < v.ahdD ? 1.0f - (1.0f - v.sus) * (float) (t / v.ahdD) : v.sus;
+                }
+                const float g = v.env * fade * ahd;
                 const float ol = xl * v.gl * g, orr = xr * v.gr * g;
                 L[i] += ol; R[i] += orr;
+                vpk = juce::jmax (vpk, std::abs (ol), std::abs (orr));
                 if (v.fxSend > 0) { FL[i] += ol * v.fxSend; FR[i] += orr * v.fxSend; }
                 // pitch envelope
                 double inc = v.inc;
@@ -593,11 +608,12 @@ private:
                 v.pos += v.reverse ? -inc : inc; v.played += 1;
                 if (v.reverse ? v.pos <= v.a : v.pos >= v.b) { v.active = false; break; }
             }
+            padPk[v.pad] = juce::jmax (padPk[v.pad], vpk);
             v.delay = juce::jmax (0, v.delay - n);
             if (v.active && v.delay == 0 && v.startedAt >= newest[v.pad])
             { newest[v.pad] = v.startedAt; lastPos[v.pad] = (float) (v.pos / juce::jmax (1, b.getNumSamples())); }
         }
-        for (int p = 0; p < beat::numPads; ++p) padPos[p] = lastPos[p];
+        for (int p = 0; p < beat::numPads; ++p) { padPos[p] = lastPos[p]; padPeak[p] = juce::jmax (padPk[p], padPeak[p].load() * 0.92f); }
         // FX (reverb) qaytishi
         reverb.processStereo (busBuf.getWritePointer (10), busBuf.getWritePointer (11), n);
         // shinalar -> master
@@ -619,6 +635,7 @@ private:
         }
     }
 public:
+    std::atomic<float> padPeak[beat::numPads] {};         // har pad chiqishi (mikser metrlari)
     std::atomic<float> padPos[beat::numPads] {};          // pad'ning hozir chalinayotgan joyi (0..1), -1 = jim
     std::atomic<float> busPeak[beat::numBuses + 2] {};    // 0 = master (to'g'ridan), 1..4 = Bus, 5 = FX
 private:
@@ -675,7 +692,9 @@ public:
         gainK.setDoubleClickReturnValue (true, 0); panK.setDoubleClickReturnValue (true, 0); tuneK.setDoubleClickReturnValue (true, 0); fineK.setDoubleClickReturnValue (true, 0);
 
         auto bindPad = [this] (juce::Slider& s, const char* id) { s.onValueChange = [this, &s, id] { plugin.pad (sel).setProperty (id, s.getValue(), plugin.um()); repaint(); }; };
-        bindPad (gainK, "gain"); bindPad (panK, "pan"); bindPad (tuneK, "tune"); bindPad (fineK, "fine"); bindPad (atkK, "attack"); bindPad (decK, "decay"); bindPad (dlyK, "delay");
+        bindPad (gainK, "gain"); bindPad (panK, "pan");
+        gainK.onValueChange = [this] { plugin.pad (sel).setProperty ("gain", gainK.getValue(), plugin.um()); padF[sel].setValue (gainK.getValue(), juce::dontSendNotification); repaint(); };
+        atkK.textFromValueFunction = decK.textFromValueFunction = [] (double v) { return v >= 1000 ? juce::String (v / 1000.0, 2) + " s" : juce::String (v, v < 10 ? 1 : 0) + " ms"; }; bindPad (tuneK, "tune"); bindPad (fineK, "fine"); bindPad (atkK, "attack"); bindPad (decK, "decay"); bindPad (dlyK, "delay");
         swingK.onValueChange = [this] { plugin.state.setProperty ("swing", swingK.getValue() / 100.0, plugin.um()); };
         revB.onClick  = [this] { plugin.pad (sel).setProperty ("reverse", revB.getToggleState(), plugin.um()); repaint(); };
         syncB.onClick = [this] { plugin.pad (sel).setProperty ("sync", syncB.getToggleState(), plugin.um()); };
@@ -724,7 +743,7 @@ public:
         auto fader = [this] (juce::Slider& f, const juce::String& prop, double def)
         {
             addAndMakeVisible (f); f.setSliderStyle (juce::Slider::LinearVertical);
-            f.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 58, 15); f.setRange (-60.0, 6.0, 0.1); f.setSkewFactorFromMidPoint (-12.0);
+            f.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); f.setRange (-60.0, 6.0, 0.1); f.setSkewFactorFromMidPoint (-12.0);
             f.setTextValueSuffix (" dB"); f.setDoubleClickReturnValue (true, def); f.setScrollWheelEnabled (true);
             f.setMouseDragSensitivity (180);
             f.onValueChange = [this, &f, prop] { plugin.state.setProperty (prop, f.getValue(), plugin.um()); };
@@ -733,6 +752,29 @@ public:
         fader (fxF, "fxReturn", -6.0);
         fader (masterK, "master", 0.0);
         masterK.onValueChange = [this] { plugin.state.setProperty ("master", masterK.getValue(), plugin.um()); };
+        // ---- Pad mikseri: har sample'ning o'z faderi (pad gain), metri, M/S, chiqish shinasi
+        for (int p = 0; p < beat::numPads; ++p)
+        {
+            auto& f = padF[p];
+            addAndMakeVisible (f); f.setSliderStyle (juce::Slider::LinearVertical); f.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+            f.setRange (-60.0, 12.0, 0.1); f.setSkewFactorFromMidPoint (-12.0); f.setDoubleClickReturnValue (true, 0.0); f.setScrollWheelEnabled (true);
+            f.setMouseDragSensitivity (180); f.setPopupDisplayEnabled (true, true, this); f.setTextValueSuffix (" dB");
+            f.setColour (juce::Slider::trackColourId, beatColour (p));
+            f.onValueChange = [this, p]
+            {
+                plugin.pad (p).setProperty ("gain", padF[p].getValue(), plugin.um());
+                if (p == sel) gainK.setValue (padF[p].getValue(), juce::dontSendNotification);
+                repaint (mixPanel().toNearestInt());
+            };
+            f.onDragStart = [this, p] { if (sel != p) { sel = p; refresh(); } };
+        }
+        addChildComponent (nameEd);
+        nameEd.setFont (font (12, 600)); nameEd.setJustification (juce::Justification::centredLeft); nameEd.setIndents (6, 2);
+        nameEd.setColour (juce::TextEditor::backgroundColourId, bg1); nameEd.setColour (juce::TextEditor::outlineColourId, red);
+        nameEd.setColour (juce::TextEditor::focusedOutlineColourId, red);
+        nameEd.onReturnKey = [this] { commitRename(); };
+        nameEd.onEscapeKey = [this] { nameEd.setVisible (false); };
+        nameEd.onFocusLost = [this] { commitRename(); };
         addAndMakeVisible (busBox);
         busBox.addItem ("Out: Master", 1); for (int b = 1; b <= beat::numBuses; ++b) busBox.addItem ("Out: Bus " + juce::String (b), b + 1);
         busBox.setTooltip (U ("Tanlangan pad qaysi shinaga chiqadi (Battery Buses)"));
@@ -742,6 +784,11 @@ public:
         knob (peAmtK, -48, 48, 0.1, " st"); peAmtK.getProperties().set ("bipolar", true); peAmtK.setDoubleClickReturnValue (true, 0);
         knob (peD1K, 1, 2000, 1, " ms", 80); knob (peBrkK, 0, 1, 0.01, ""); knob (peD2K, 1, 5000, 1, " ms", 400);
         bindPad (peAmtK, "pe_amt"); bindPad (peD1K, "pe_d1"); bindPad (peBrkK, "pe_brk"); bindPad (peD2K, "pe_d2");
+        // ---- Amp envelope (Battery): Attack, Hold, Decay, Sustain, Release
+        knob (holdK, 0, 5000, 1, " ms", 300); knob (envDecK, 0, 5000, 1, " ms", 300); knob (susK, 0, 1, 0.01, "");
+        susK.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
+        susK.setDoubleClickReturnValue (true, 1.0); holdK.setDoubleClickReturnValue (true, 0); envDecK.setDoubleClickReturnValue (true, 0);
+        bindPad (holdK, "hold"); bindPad (envDecK, "env_dec"); bindPad (susK, "sustain");
         peBrkK.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
 
         // ---- Filter / EQ (Battery)
@@ -767,10 +814,12 @@ public:
         fResK.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
         fCutK.textFromValueFunction = [] (double v) { return v >= 1000 ? juce::String (v / 1000.0, 1) + " kHz" : juce::String (juce::roundToInt (v)) + " Hz"; };
         bindPad (fCutK, "f_cut"); bindPad (fResK, "f_res"); bindPad (fGainK, "f_gain");
-        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK, &swingK, &peAmtK, &peD1K, &peBrkK, &peD2K, &fCutK, &fResK, &fGainK })
+        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK, &swingK, &peAmtK, &peD1K, &peBrkK, &peD2K, &fCutK, &fResK, &fGainK, &holdK, &envDecK, &susK })
             k->setScrollWheelEnabled (true);
         refresh();
-        setSize (1240, 888);
+        holdK.textFromValueFunction = envDecK.textFromValueFunction = atkK.textFromValueFunction;
+        for (auto* k : { &atkK, &decK, &holdK, &envDecK }) k->setTextValueSuffix ({});
+        setSize (defaultW, defaultH);
         startTimerHz (30);
     }
     ~BeatEditor() override { stopTimer(); }
@@ -794,6 +843,10 @@ public:
         masterK.setValue ((double) plugin.state["master"], juce::dontSendNotification);
         for (int b = 0; b < beat::numBuses; ++b) busF[b].setValue ((double) plugin.state.getProperty ("bus" + juce::String (b + 1), 0.0), juce::dontSendNotification);
         fxF.setValue ((double) plugin.state.getProperty ("fxReturn", -6.0), juce::dontSendNotification);
+        for (int p = 0; p < beat::numPads; ++p) padF[p].setValue ((double) plugin.pad (p)["gain"], juce::dontSendNotification);
+        holdK.setValue ((double) v.getProperty ("hold", 0.0), juce::dontSendNotification);
+        envDecK.setValue ((double) v.getProperty ("env_dec", 0.0), juce::dontSendNotification);
+        susK.setValue ((double) v.getProperty ("sustain", 1.0), juce::dontSendNotification);
         busBox.setSelectedId ((int) v.getProperty ("bus", 0) + 1, juce::dontSendNotification);
         for (auto [s, id, d] : std::initializer_list<std::tuple<juce::Slider*, const char*, double>> { { &peAmtK, "pe_amt", 0.0 }, { &peD1K, "pe_d1", 60.0 }, { &peBrkK, "pe_brk", 0.3 }, { &peD2K, "pe_d2", 300.0 },
                                                                                                       { &fCutK, "f_cut", 20000.0 }, { &fResK, "f_res", 0.1 }, { &fGainK, "f_gain", 0.0 } })
@@ -819,10 +872,34 @@ public:
         const float w = g.getWidth() / plugin.length();
         return { g.getX() + s * w, g.getY() + p * rowH, w, rowH };
     }
-    juce::Rectangle<float> waveArea() const { return { 16, 488, 580, 130 }; }
-    juce::Rectangle<float> busPanel() const { return { 16, 636, 580, 224 }; }
-    juce::Rectangle<float> pePanel() const  { return { 612, 636, 296, 224 }; }
-    juce::Rectangle<float> fltPanel() const { return { 920, 636, (float) getWidth() - 936, 224 }; }
+public:
+    static constexpr int defaultW = 1240, defaultH = 1136;
+private:
+    juce::Rectangle<float> waveArea() const { return { 16, 478, 580, 158 }; }
+    juce::Rectangle<float> pePanel() const  { return { 16, 650, 388, 224 }; }
+    juce::Rectangle<float> fltPanel() const { return { 416, 650, 388, 224 }; }
+    juce::Rectangle<float> ampPanel() const { return { 816, 650, (float) getWidth() - 832, 224 }; }
+    juce::Rectangle<float> mixPanel() const { return { 16, 884, (float) getWidth() - 32, 226 }; }
+    // mikser: 0..19 — padlar, 20..23 — Bus 1-4, 24 — FX, 25 — Master
+    static constexpr int numStrips = beat::numPads + 6;
+    juce::Rectangle<float> stripRect (int k) const
+    {
+        auto mp = mixPanel(); const float x0 = mp.getX() + 8, w = mp.getWidth() - 16, bw = 48;
+        const float pw = (w - 6 * bw - 10) / beat::numPads;
+        if (k < beat::numPads) return { x0 + k * pw, mp.getY() + 24, pw, mp.getHeight() - 28 };
+        return { x0 + beat::numPads * pw + 10 + (k - beat::numPads) * bw, mp.getY() + 24, bw, mp.getHeight() - 28 };
+    }
+    juce::Rectangle<float> stripName (int k) const  { auto r = stripRect (k); return { r.getX() + 1, r.getY(), r.getWidth() - 2, 17 }; }
+    juce::Rectangle<float> stripFader (int k) const { auto r = stripRect (k); return { r.getX() + 2, r.getY() + 20, juce::jmin (26.0f, r.getWidth() - 14), 124 }; }
+    juce::Rectangle<float> stripMeter (int k) const { auto f = stripFader (k); return { f.getRight() + 2, f.getY() + 6, 5, f.getHeight() - 12 }; }
+    juce::Rectangle<float> stripDb (int k) const    { auto r = stripRect (k); return { r.getX(), r.getY() + 146, r.getWidth(), 12 }; }
+    juce::Rectangle<float> stripM (int k) const     { auto r = stripRect (k); return { r.getX() + 2, r.getY() + 161, (r.getWidth() - 6) * 0.5f, 15 }; }
+    juce::Rectangle<float> stripS (int k) const     { auto m = stripM (k); return m.translated (m.getWidth() + 2, 0); }
+    juce::Rectangle<float> stripOut (int k) const   { auto r = stripRect (k); return { r.getX() + 2, r.getY() + 179, r.getWidth() - 4, 15 }; }
+    juce::String busName (int b) const   // b: 1..4
+    { return plugin.state.getProperty ("busName" + juce::String (b), "BUS " + juce::String (b)).toString(); }
+    juce::String padName (int p) const
+    { const auto n = plugin.pad (p)["name"].toString(); return n.isNotEmpty() ? n : "Pad " + juce::String (p + 1); }
 
     void resized() override
     {
@@ -841,18 +918,23 @@ public:
         // pad paneli
         const int y = 470;
         int x = 620;
-        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &atkK, &decK, &dlyK }) { k->setBounds (x, y + 6, 58, 78); x += 62; }
+        for (auto* k : { &gainK, &panK, &tuneK, &fineK, &dlyK }) { k->setBounds (x, y + 6, 58, 78); x += 64; }
         swingK.setBounds (getWidth() - 82, y + 6, 64, 78);
         x = 620;
         loadSmpB.setBounds (x, 568, 90, 26); revB.setBounds (x + 96, 568, 80, 26); syncB.setBounds (x + 182, 568, 62, 26);
         chokeBox.setBounds (x + 250, 568, 96, 26); muteB.setBounds (x + 352, 568, 30, 26); soloB.setBounds (x + 386, 568, 30, 26);
         normB.setBounds (x, 600, 120, 24); busBox.setBounds (x + 126, 600, 120, 24);
-        prevB.setBounds (16, 466, 26, 18); nextB.setBounds (46, 466, 26, 18);
-        // Buses
-        auto bp = busPanel().toNearestInt();
-        const int cw = bp.getWidth() / 6;
+        prevB.setBounds (16, 456, 26, 18); nextB.setBounds (46, 456, 26, 18);
+        // Mikser: pad faderlari + Bus 1-4, FX, Master
+        for (int p = 0; p < beat::numPads; ++p) padF[p].setBounds (stripFader (p).toNearestInt());
         juce::Slider* fs[] = { &busF[0], &busF[1], &busF[2], &busF[3], &fxF, &masterK };
-        for (int i = 0; i < 6; ++i) fs[i]->setBounds (bp.getX() + i * cw + 8, bp.getY() + 28, 52, 168);
+        for (int i = 0; i < 6; ++i) fs[i]->setBounds (stripFader (beat::numPads + i).toNearestInt());
+        // Amp envelope
+        {
+            auto ap = ampPanel().toNearestInt(); const int kw = (ap.getWidth() - 16) / 5;
+            int ax = ap.getX() + 8;
+            for (auto* k : { &atkK, &holdK, &envDecK, &susK, &decK }) { k->setBounds (ax + (kw - 66) / 2, ap.getY() + 136, 66, 80); ax += kw; }
+        }
         // Pitch envelope
         auto pe = pePanel().toNearestInt();
         x = pe.getX() + 8;
@@ -959,7 +1041,7 @@ public:
             g.setColour (red); g.fillRect (ex - 1, wa.getY(), 2.0f, wa.getHeight());
             label (g, "S", { sx + 3, wa.getY() + 2, 12, 12 }, 9, green, Justification::centredLeft, 800);
             label (g, "E", { ex - 13, wa.getY() + 2, 12, 12 }, 9, red, Justification::centredLeft, 800);
-            label (g, String (sr > 0 ? N / sr : 0.0, 2) + " s", wa.reduced (8, 4), 9, dim, Justification::bottomRight, 500);
+            paintWaveEnv (g, wa, sx, ex, N, sr);
             // ovoz qayerda ketayotgani (playhead)
             if (const float pp = plugin.padPos[sel].load(); pp >= 0.0f)
             {
@@ -970,11 +1052,11 @@ public:
             }
         }
         else label (g, U ("Sample yo'q \xe2\x80\x94 media brauzerdan sudrab tashlang yoki \"Sample...\""), wa, 10.5f, dim, Justification::centred, 500);
-        const char* kn[] = { "GAIN", "PAN", "TUNE", "FINE", "ATTACK", "DECAY", "DELAY" };
-        int x = 620; for (auto* n : kn) { caps (g, n, { (float) x, 458, 58, 10 }, 8, n[1] == 'E' && n[2] == 'L' ? Colour (0xff4ad6ff) : dim, Justification::centred); x += 62; }
+        const char* kn[] = { "GAIN", "PAN", "TUNE", "FINE", "DELAY" };
+        int x = 620; for (auto* n : kn) { caps (g, n, { (float) x, 458, 58, 10 }, 8, n[1] == 'E' && n[2] == 'L' ? Colour (0xff4ad6ff) : dim, Justification::centred); x += 64; }
         caps (g, "SWING", { (float) getWidth() - 82, 458, 64, 10 }, 8, dim, Justification::centred);
         g.setColour (Colours::white.withAlpha (0.06f)); g.drawVerticalLine (getWidth() - 92, 456, 560);
-        paintBuses (g); paintPitchEnv (g); paintFilter (g);
+        paintMixer (g); paintPitchEnv (g); paintFilter (g); paintAmpEnv (g);
         if (dropHint >= 0) { g.setColour (Colours::white.withAlpha (0.8f)); g.drawRoundedRectangle (padRect (dropHint), 10, 2.5f); }
         if (info.isNotEmpty()) label (g, info, { 16, (float) getHeight() - 24, (float) getWidth() - 32, 18 }, 10, silver, Justification::centredLeft, 500);
         label (g, U ("MIDI: C1 (36) = Pad 1 \xe2\x80\xa6 G2 (55) = Pad 20"), { 16, (float) getHeight() - 24, (float) getWidth() - 32, 18 }, 9, dim2, Justification::centredRight, 400);
@@ -1034,31 +1116,244 @@ public:
         g.setColour (juce::Colours::white.withAlpha (0.07f)); g.drawRoundedRectangle (r.reduced (0.5f), 8, 1.0f);
         caps (g, title, r.reduced (10, 8).withHeight (12), 8.5f);
     }
-    void paintBuses (juce::Graphics& g)
+    // ---------------------------------------------------------------- Mikser (har sample + shinalar)
+    void paintMixer (juce::Graphics& g)
     {
         using namespace juce;
-        auto bp = busPanel(); panelBg (g, bp, "BUSES");
-        label (g, U ("g'ildirak / sudrash \xc2\xb7 ikki marta bosish: 0 dB"), bp.reduced (10, 8).withHeight (12), 8.5f, dim2, Justification::centredRight, 400);
-        const float cw = bp.getWidth() / 6.0f;
-        const char* names[] = { "BUS 1", "BUS 2", "BUS 3", "BUS 4", "FX", "MASTER" };
+        auto mp = mixPanel(); panelBg (g, mp, U ("MIKSER \xc2\xb7 PADLAR VA SHINALAR"));
+        label (g, U ("fader / g'ildirak \xc2\xb7 ikki marta bosish: 0 dB \xc2\xb7 nomni ikki marta bosib o'zgartiring \xc2\xb7 OUT: shina"), mp.reduced (10, 8).withHeight (12), 8.5f, dim2, Justification::centredRight, 400);
         float mpk = 0; for (auto& b : plugin.busPeak) mpk = jmax (mpk, b.load());
-        for (int i = 0; i < 6; ++i)
+        for (int k = 0; k < numStrips; ++k)
         {
-            const float pk = i < 4 ? plugin.busPeak[i + 1].load() : i == 4 ? plugin.busPeak[5].load() : mpk;
-            auto m = Rectangle<float> (bp.getX() + i * cw + 64, bp.getY() + 34, 7, 152);
-            g.setColour (Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (m, 2);
+            auto r = stripRect (k);
+            const bool isPad = k < beat::numPads;
+            const int p = k;
+            if (isPad && p == sel) { g.setColour (beatColour (p).withAlpha (0.12f)); g.fillRoundedRectangle (r, 4); }
+            if (k == beat::numPads) { g.setColour (Colours::white.withAlpha (0.10f)); g.drawVerticalLine ((int) r.getX() - 6, r.getY(), r.getBottom()); }
+            // nom
+            auto nr = stripName (k);
+            const Colour col = isPad ? beatColour (p) : k == numStrips - 1 ? red : k == numStrips - 2 ? Colour (0xffb98aff) : Colour (0xff4ad6ff);
+            g.setColour (col.withAlpha (isPad ? 0.85f : 0.6f)); g.fillRect (nr.getX(), nr.getY(), nr.getWidth(), 2.0f);
+            const String nm = isPad ? padName (p) : k < beat::numPads + 4 ? busName (k - beat::numPads + 1) : k == numStrips - 2 ? String ("FX") : String ("MASTER");
+            label (g, isPad ? String (p + 1) : String(), nr.withTrimmedTop (3), 7, dim2, Justification::topLeft, 700);
+            label (g, nm, nr.withTrimmedTop (3).withTrimmedLeft (isPad ? 9.0f : 0.0f), isPad ? 8.0f : 8.5f, isPad && (bool) plugin.pad (p)["mute"] ? dim2 : text, isPad ? Justification::centredLeft : Justification::centred, 600);
+            // metr
+            const float pk = isPad ? plugin.padPeak[p].load() : k < beat::numPads + 4 ? plugin.busPeak[k - beat::numPads + 1].load() : k == numStrips - 2 ? plugin.busPeak[5].load() : mpk;
+            auto m = stripMeter (k);
+            g.setColour (Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (m, 2);
             const float db = Decibels::gainToDecibels (pk, -60.0f);
             const float h = m.getHeight() * jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
             g.setGradientFill (ColourGradient (green, 0, m.getBottom(), red, 0, m.getY(), false));
             g.fillRoundedRectangle (m.withTop (m.getBottom() - h), 2);
-            // shu shinaga yo'naltirilgan padlar soni
-            int cnt = 0; if (i < 4) for (int p = 0; p < beat::numPads; ++p) if ((int) plugin.pad (p).getProperty ("bus", 0) == i + 1) ++cnt;
-            const bool cur = i < 4 && (int) plugin.pad (sel).getProperty ("bus", 0) == i + 1;
-            label (g, names[i], { bp.getX() + i * cw, bp.getBottom() - 26, cw, 12 }, 8.5f, i == 5 ? red : cur ? Colour (0xff4ad6ff) : text, Justification::centred, 800);
-            if (i < 4) label (g, String (cnt) + " pad", { bp.getX() + i * cw, bp.getBottom() - 14, cw, 10 }, 7.5f, dim2, Justification::centred, 500);
-            if (i > 0) { g.setColour (Colours::white.withAlpha (0.05f)); g.drawVerticalLine ((int) (bp.getX() + i * cw), bp.getY() + 28, bp.getBottom() - 8); }
+            // dB qiymati
+            const double val = isPad ? padF[p].getValue() : k < beat::numPads + 4 ? busF[k - beat::numPads].getValue() : k == numStrips - 2 ? fxF.getValue() : masterK.getValue();
+            label (g, val <= -59.9 ? String::fromUTF8 ("-\xe2\x88\x9e") : String (val, 1), stripDb (k), 8, silver, Justification::centred, 600);
+            if (isPad)
+            {
+                auto v = plugin.pad (p);
+                auto mm = stripM (k), ss = stripS (k);
+                const bool mu = v["mute"], so = v["solo"];
+                g.setColour (mu ? yellow.withAlpha (0.8f) : Colours::white.withAlpha (0.06f)); g.fillRoundedRectangle (mm, 3);
+                g.setColour (so ? green.withAlpha (0.8f) : Colours::white.withAlpha (0.06f)); g.fillRoundedRectangle (ss, 3);
+                label (g, "M", mm, 8, mu ? Colours::black : dim, Justification::centred, 800);
+                label (g, "S", ss, 8, so ? Colours::black : dim, Justification::centred, 800);
+                const int bus = (int) v.getProperty ("bus", 0);
+                auto o = stripOut (k);
+                g.setColour (bus > 0 ? Colour (0xff4ad6ff).withAlpha (0.22f) : Colours::white.withAlpha (0.05f)); g.fillRoundedRectangle (o, 3);
+                label (g, bus > 0 ? "B" + String (bus) : String ("MST"), o, 7.5f, bus > 0 ? Colour (0xff4ad6ff) : dim, Justification::centred, 700);
+            }
+            else if (k < beat::numPads + 4)
+            {
+                int cnt = 0; for (int q = 0; q < beat::numPads; ++q) if ((int) plugin.pad (q).getProperty ("bus", 0) == k - beat::numPads + 1) ++cnt;
+                label (g, String (cnt) + " pad", stripM (k).withWidth (r.getWidth() - 4), 8, dim2, Justification::centred, 500);
+            }
         }
     }
+    // ---------------------------------------------------------------- Amp envelope paneli
+    void paintAmpEnv (juce::Graphics& g)
+    {
+        using namespace juce;
+        auto ap = ampPanel(); panelBg (g, ap, "AMP ENVELOPE");
+        auto v = plugin.pad (sel);
+        const float a = (float) (double) v["attack"], h = (float) (double) v.getProperty ("hold", 0.0), d = (float) (double) v.getProperty ("env_dec", 0.0),
+                    su = (float) (double) v.getProperty ("sustain", 1.0), rl = (float) (double) v["decay"];
+        auto r = Rectangle<float> (ap.getX() + 10, ap.getY() + 26, ap.getWidth() - 20, 92);
+        g.setColour (Colour (0xff09080b)); g.fillRoundedRectangle (r, 6);
+        const float total = jmax (1.0f, a + h + d + rl) * 1.25f + 1;
+        const float body = total * 0.2f;   // sustain bo'lagi
+        auto X = [&] (float t) { return r.getX() + 6 + (r.getWidth() - 12) * t / (total + body); };
+        const float top = r.getY() + 8, bot = r.getBottom() - 6, ys = bot - (bot - top) * su;
+        Path p; p.startNewSubPath (X (0), bot); p.lineTo (X (a), top); p.lineTo (X (a + h), top); p.lineTo (X (a + h + d), ys);
+        p.lineTo (X (a + h + d + body), ys); p.lineTo (X (a + h + d + body + rl), bot);
+        Path f (p); f.lineTo (X (0), bot); f.closeSubPath();
+        g.setColour (Colour (0xff4aa8ff).withAlpha (0.22f)); g.fillPath (f);
+        g.setColour (Colour (0xff6cc0ff)); g.strokePath (p, PathStrokeType (1.8f));
+        label (g, "A " + String (roundToInt (a)) + "  H " + String (roundToInt (h)) + "  D " + String (roundToInt (d)) + "  S " + String (roundToInt (su * 100)) + "%  R " + String (roundToInt (rl)),
+               r.reduced (6, 3), 8.5f, Colour (0xff6cc0ff), Justification::topRight, 700);
+        const char* kn[] = { "ATTACK", "HOLD", "DECAY", "SUSTAIN", "RELEASE" };
+        const float kw = (ap.getWidth() - 16) / 5.0f;
+        for (int i = 0; i < 5; ++i) caps (g, kn[i], { ap.getX() + 8 + i * kw, ap.getY() + 124, kw, 10 }, 8, dim, Justification::centred);
+    }
+    // ---------------------------------------------------------------- to'lqin ustidagi envelope (Battery kabi)
+    struct WaveGeo { juce::Rectangle<float> wa; float sx = 0, ex = 0, top = 0, bot = 0; double regionMs = 1; };
+    WaveGeo waveGeo() const
+    {
+        WaveGeo w; w.wa = waveArea();
+        double sr = 48000; auto buf = plugin.sampleOf (sel, sr);
+        auto v = plugin.pad (sel);
+        w.sx = w.wa.getX() + w.wa.getWidth() * (float) (double) v["start"]; w.ex = w.wa.getX() + w.wa.getWidth() * (float) (double) v["end"];
+        w.top = w.wa.getY() + 14; w.bot = w.wa.getBottom() - 20;
+        const int N = buf ? buf->getNumSamples() : 0;
+        w.regionMs = juce::jmax (1.0, (double) N / juce::jmax (1.0, sr) * ((double) v["end"] - (double) v["start"]) * 1000.0);
+        return w;
+    }
+    float xAtMs (const WaveGeo& w, double ms) const { return w.sx + (float) (juce::jlimit (0.0, w.regionMs, ms) / w.regionMs) * (w.ex - w.sx); }
+    double msAtX (const WaveGeo& w, float x) const { return juce::jlimit (0.0, w.regionMs, (double) (x - w.sx) / juce::jmax (1.0f, w.ex - w.sx) * w.regionMs); }
+    std::array<juce::Point<float>, 6> ampNodes (const WaveGeo& w) const
+    {
+        auto v = plugin.pad (sel);
+        const double a = v["attack"], h = v.getProperty ("hold", 0.0), d = v.getProperty ("env_dec", 0.0), rl = v["decay"];
+        const float su = (float) (double) v.getProperty ("sustain", 1.0), ys = w.bot - (w.bot - w.top) * su;
+        const float x3 = xAtMs (w, a + h + d), x4 = juce::jmax (x3, xAtMs (w, w.regionMs - rl));
+        return { juce::Point<float> (w.sx, w.bot), { xAtMs (w, a), w.top }, { xAtMs (w, a + h), w.top }, { x3, ys }, { x4, ys }, { w.ex, w.bot } };
+    }
+    std::array<juce::Point<float>, 3> pitchNodes (const WaveGeo& w) const
+    {
+        auto v = plugin.pad (sel);
+        const double amt = v.getProperty ("pe_amt", 0.0), d1 = v.getProperty ("pe_d1", 60.0), d2 = v.getProperty ("pe_d2", 300.0);
+        const double brk = juce::jlimit (0.01, 0.999, (double) v.getProperty ("pe_brk", 0.3));
+        const float mid = (w.top + w.bot) * 0.5f, half = (w.bot - w.top) * 0.5f;
+        auto Y = [&] (double st) { return mid - (float) (st / 48.0) * half; };
+        const double t1 = -d1 * std::log (brk), t2 = t1 + 3.0 * d2;
+        return { juce::Point<float> (w.sx, Y (amt)), { xAtMs (w, t1), Y (amt * brk) }, { xAtMs (w, t2), Y (amt * 0.05) } };
+    }
+    juce::Rectangle<float> envTabRect (int i) const { auto wa = waveArea(); return { wa.getRight() - 156 + i * 76.0f, wa.getBottom() - 18, 72, 14 }; }
+    void paintWaveEnv (juce::Graphics& g, juce::Rectangle<float> wa, float sx, float ex, int N, double sr)
+    {
+        using namespace juce;
+        const auto w = waveGeo();
+        if (envTab == 0)
+        {
+            const auto n = ampNodes (w);
+            Path p; p.startNewSubPath (n[0]); for (int i = 1; i < 6; ++i) p.lineTo (n[(size_t) i]);
+            Path f (p); f.closeSubPath();
+            g.setGradientFill (ColourGradient (Colour (0xff4aa8ff).withAlpha (0.45f), 0, w.top, Colour (0xff4aa8ff).withAlpha (0.08f), 0, w.bot, false));
+            g.fillPath (f);
+            g.setColour (Colour (0xff8fd0ff)); g.strokePath (p, PathStrokeType (1.6f));
+            for (int i = 1; i <= 4; ++i)
+            {
+                const auto pt = n[(size_t) i]; const bool hv = hoverNode == i;
+                g.setColour (Colours::white); g.fillEllipse (pt.x - (hv ? 5.0f : 3.5f), pt.y - (hv ? 5.0f : 3.5f), hv ? 10.0f : 7.0f, hv ? 10.0f : 7.0f);
+            }
+        }
+        else
+        {
+            const auto n = pitchNodes (w);
+            const float mid = (w.top + w.bot) * 0.5f;
+            g.setColour (Colours::white.withAlpha (0.18f)); g.drawHorizontalLine ((int) mid, sx, ex);
+            auto v = plugin.pad (sel);
+            const double amt = v.getProperty ("pe_amt", 0.0), d1 = v.getProperty ("pe_d1", 60.0), d2 = v.getProperty ("pe_d2", 300.0);
+            const double brk = jlimit (0.01, 0.999, (double) v.getProperty ("pe_brk", 0.3));
+            Path p; bool first = true;
+            for (float x = sx; x <= ex; x += 1.5f)
+            {
+                const double t = msAtX (w, x), t1 = -d1 * std::log (brk);
+                const double lvl = t < t1 ? std::exp (-t / jmax (1.0, d1)) : brk * std::exp (-(t - t1) / jmax (1.0, d2));
+                const float y = mid - (float) (amt * lvl / 48.0) * (w.bot - w.top) * 0.5f;
+                if (first) { p.startNewSubPath (x, y); first = false; } else p.lineTo (x, y);
+            }
+            g.setColour (Colour (0xffb98aff)); g.strokePath (p, PathStrokeType (1.8f));
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto pt = n[(size_t) i]; const bool hv = hoverNode == i;
+                g.setColour (Colours::white); g.fillEllipse (pt.x - (hv ? 5.0f : 3.5f), pt.y - (hv ? 5.0f : 3.5f), hv ? 10.0f : 7.0f, hv ? 10.0f : 7.0f);
+            }
+            label (g, String (amt >= 0 ? "+" : "") + String (amt, 1) + " st", { sx + 8, w.top - 12, 80, 12 }, 8.5f, Colour (0xffb98aff), Justification::centredLeft, 700);
+        }
+        // pastki ma'lumot qatori (Battery kabi)
+        auto v = plugin.pad (sel);
+        const String fileName = File (v["file"].toString()).getFileName();
+        const double regionSec = w.regionMs / 1000.0;
+        g.setColour (Colours::black.withAlpha (0.55f)); g.fillRect (wa.withTop (wa.getBottom() - 20).reduced (1, 0));
+        label (g, "pad " + String (sel + 1) + ": " + (fileName.isNotEmpty() ? fileName : padName (sel)) + String::fromUTF8 ("   \xc2\xb7   oneshot length (seconds): ") + String (regionSec, 4),
+               { wa.getX() + 8, wa.getBottom() - 19, wa.getWidth() - 330, 18 }, 8.5f, silver, Justification::centredLeft, 500);
+        label (g, "START: " + String ((int) ((double) v["start"] * N)) + "   " + String (N / jmax (1.0, sr), 2) + " s",
+               { wa.getRight() - 330, wa.getBottom() - 19, 168, 18 }, 8.5f, silver, Justification::centredRight, 600);
+        const char* tabs[] = { "AMP ENV", "PITCH ENV" };
+        for (int i = 0; i < 2; ++i)
+        {
+            auto t = envTabRect (i); const bool on = envTab == i;
+            g.setColour (on ? (i == 0 ? Colour (0xff4aa8ff) : Colour (0xffb98aff)).withAlpha (0.35f) : Colours::white.withAlpha (0.06f)); g.fillRoundedRectangle (t, 3);
+            g.setColour (Colours::white.withAlpha (on ? 0.5f : 0.15f)); g.drawRoundedRectangle (t, 3, 1);
+            label (g, tabs[i], t, 8, on ? Colours::white : dim, Justification::centred, 700);
+        }
+    }
+    int envNodeAt (juce::Point<float> pt) const
+    {
+        const auto w = waveGeo();
+        if (envTab == 0) { const auto n = ampNodes (w); for (int i = 4; i >= 1; --i) if (n[(size_t) i].getDistanceFrom (pt) < 8) return i; }
+        else { const auto n = pitchNodes (w); for (int i = 2; i >= 0; --i) if (n[(size_t) i].getDistanceFrom (pt) < 8) return i; }
+        return -1;
+    }
+    void dragEnvNode (int node, juce::Point<float> pt)
+    {
+        const auto w = waveGeo(); auto v = plugin.pad (sel); auto* um = plugin.um();
+        const double t = msAtX (w, pt.x);
+        if (envTab == 0)
+        {
+            const double a = v["attack"], h = v.getProperty ("hold", 0.0);
+            if (node == 1) v.setProperty ("attack", juce::jlimit (0.0, 200.0, t), um);
+            if (node == 2) v.setProperty ("hold", juce::jlimit (0.0, 5000.0, t - a), um);
+            if (node == 3)
+            {
+                v.setProperty ("env_dec", juce::jlimit (0.0, 5000.0, t - a - h), um);
+                v.setProperty ("sustain", juce::jlimit (0.0, 1.0, (double) ((w.bot - pt.y) / (w.bot - w.top))), um);
+            }
+            if (node == 4) v.setProperty ("decay", juce::jlimit (0.0, 2000.0, w.regionMs - t), um);
+            info = "A " + juce::String ((double) v["attack"], 1) + " ms  H " + juce::String ((double) v["hold"], 0) + " ms  D " + juce::String ((double) v["env_dec"], 0)
+                 + " ms  S " + juce::String (juce::roundToInt ((double) v["sustain"] * 100)) + "%  R " + juce::String ((double) v["decay"], 0) + " ms";
+        }
+        else
+        {
+            const float mid = (w.top + w.bot) * 0.5f, half = (w.bot - w.top) * 0.5f;
+            const double st = juce::jlimit (-48.0, 48.0, (double) ((mid - pt.y) / half * 48.0f));
+            const double amt = v.getProperty ("pe_amt", 0.0);
+            const double brk = juce::jlimit (0.01, 0.999, (double) v.getProperty ("pe_brk", 0.3)), d1 = v.getProperty ("pe_d1", 60.0);
+            if (node == 0) v.setProperty ("pe_amt", std::round (st * 10.0) / 10.0, um);
+            if (node == 1)
+            {
+                double nb = brk;
+                if (std::abs (amt) > 0.05) nb = juce::jlimit (0.02, 0.98, st / amt);
+                v.setProperty ("pe_brk", nb, um);
+                v.setProperty ("pe_d1", juce::jlimit (1.0, 2000.0, juce::jmax (1.0, t) / -std::log (nb)), um);
+            }
+            if (node == 2) v.setProperty ("pe_d2", juce::jlimit (1.0, 5000.0, (t - (-d1 * std::log (brk))) / 3.0), um);
+            info = "Pitch env: " + juce::String ((double) v["pe_amt"], 1) + " st  D1 " + juce::String ((double) v["pe_d1"], 0) + " ms  Break "
+                 + juce::String (juce::roundToInt ((double) v["pe_brk"] * 100)) + "%  D2 " + juce::String ((double) v["pe_d2"], 0) + " ms";
+        }
+        refresh();
+    }
+    // ---------------------------------------------------------------- nom o'zgartirish (pad / shina)
+    void startRename (int kind, int index, juce::Rectangle<float> r)
+    {
+        renameKind = kind; renameIdx = index;
+        nameEd.setText (kind == 0 ? plugin.pad (index)["name"].toString() : busName (index), juce::dontSendNotification);
+        nameEd.setBounds (r.toNearestInt().withWidth (juce::jmax (140, juce::roundToInt (r.getWidth()))).withHeight (24).constrainedWithin (getLocalBounds()));
+        nameEd.setVisible (true); nameEd.toFront (true); nameEd.grabKeyboardFocus(); nameEd.selectAll();
+    }
+public:
+    void renamePad (int p, const juce::String& n) { plugin.pad (p).setProperty ("name", n.trim().substring (0, 40), plugin.um()); repaint(); }
+    void renameBus (int b, const juce::String& n) { plugin.state.setProperty ("busName" + juce::String (b), n.trim().isEmpty() ? "BUS " + juce::String (b) : n.trim().substring (0, 16), plugin.um()); repaint(); }
+    juce::String getBusName (int b) const { return busName (b); }
+    void setPadFaderForTest (int p, double db) { padF[p].setValue (db, juce::sendNotificationSync); }
+    void commitRename()
+    {
+        if (! nameEd.isVisible()) return;
+        nameEd.setVisible (false);
+        if (renameKind == 0) renamePad (renameIdx, nameEd.getText()); else renameBus (renameIdx, nameEd.getText());
+        grabKeyboardFocus();
+    }
+
     void paintPitchEnv (juce::Graphics& g)
     {
         using namespace juce;
@@ -1188,7 +1483,38 @@ public:
             if (row >= 0 && row < beat::numPads) { sel = row; refresh(); if (e.mods.isPopupMenu()) rowMenu (row); else plugin.previewPad (row); }
             return;
         }
+        // mikser: kanalni tanlash, M / S, chiqish shinasi
+        for (int k = 0; k < numStrips; ++k)
+        {
+            if (! stripRect (k).contains (e.position)) continue;
+            if (k >= beat::numPads) return;
+            auto v = plugin.pad (k);
+            if (sel != k) { sel = k; refresh(); }
+            if (stripM (k).contains (e.position)) { v.setProperty ("mute", ! (bool) v["mute"], plugin.um()); refresh(); return; }
+            if (stripS (k).contains (e.position)) { v.setProperty ("solo", ! (bool) v["solo"], plugin.um()); refresh(); return; }
+            if (stripOut (k).contains (e.position))
+            {
+                juce::PopupMenu m; m.addSectionHeader (padName (k) + U (" â chiqish"));
+                m.addItem (1, "Master", true, (int) v.getProperty ("bus", 0) == 0);
+                for (int b = 1; b <= beat::numBuses; ++b) m.addItem (b + 1, busName (b), true, (int) v.getProperty ("bus", 0) == b);
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (stripOut (k).toNearestInt())), [this, k] (int r)
+                { if (r > 0) { plugin.pad (k).setProperty ("bus", r - 1, plugin.um()); refresh(); } });
+                return;
+            }
+            if (stripName (k).contains (e.position) && e.mods.isPopupMenu()) { startRename (0, k, stripName (k)); return; }
+            if (stripName (k).contains (e.position)) plugin.previewPad (k);
+            return;
+        }
         auto wa = waveArea();
+        if (wa.contains (e.position))
+        {
+            for (int i = 0; i < 2; ++i) if (envTabRect (i).contains (e.position)) { envTab = i; hoverNode = -1; repaint(); return; }
+            if (const int n = envNodeAt (e.position); n >= 0)
+            {
+                plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT envelope");
+                dragMode = 5; dragNode = n; return;
+            }
+        }
         if (wa.contains (e.position))
         {
             const float sx = wa.getX() + wa.getWidth() * (float) (double) plugin.pad (sel)["start"], ex = wa.getX() + wa.getWidth() * (float) (double) plugin.pad (sel)["end"];
@@ -1198,6 +1524,7 @@ public:
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (dragMode == 5) { dragEnvNode (dragNode, e.position); hoverNode = dragNode; repaint(); return; }
         if (dragMode == 4)
         {   // lane chizish (oraliq steplarni ham to'ldiradi)
             const int st = laneStepAt (e.position); if (st < 0) return;
@@ -1240,16 +1567,42 @@ public:
             repaint();
         }
     }
-    void mouseUp (const juce::MouseEvent&) override { if (dragMode == 2 || dragMode == 3) plugin.previewPad (sel); dragMode = 0; }
+    void mouseUp (const juce::MouseEvent&) override { if (dragMode == 2 || dragMode == 3 || dragMode == 5) plugin.previewPad (sel); dragMode = 0; }
     void mouseMove (const juce::MouseEvent& e) override
     {
         const int h = lane >= 0 && laneArea().contains (e.position) ? laneStepAt (e.position) : -1;
         if (h != hoverStep) { hoverStep = h; repaint(); }
+        const int hn = waveArea().contains (e.position) ? envNodeAt (e.position) : -1;
+        if (hn != hoverNode) { hoverNode = hn; repaint (waveArea().expanded (4).toNearestInt()); }
+        setMouseCursor (hn >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
     }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (lane >= 0 && laneArea().contains (e.position))
-            if (const int st = laneStepAt (e.position); st >= 0) { plugin.setLane (sel, lane, st, beat::laneDef[lane], plugin.um()); repaint(); }
+            if (const int st = laneStepAt (e.position); st >= 0) { plugin.setLane (sel, lane, st, beat::laneDef[lane], plugin.um()); repaint(); return; }
+        // nomlarni o'zgartirish: pad, sekvenser qatori, mikser kanali, shina
+        if (const int p = padAt (e.position); p >= 0)
+        { auto r = padRect (p); startRename (0, p, r.withTrimmedTop (r.getHeight() - 26).withHeight (24)); return; }
+        if (auto r = gridArea().withWidth (106); r.contains (e.position))
+        {
+            const int row = (int) ((e.position.y - r.getY()) / rowH);
+            if (row >= 0 && row < beat::numPads) startRename (0, row, r.withY (r.getY() + row * rowH).withHeight (rowH));
+            return;
+        }
+        for (int k = 0; k < numStrips - 2; ++k)
+            if (stripName (k).contains (e.position))
+            {
+                if (k < beat::numPads) startRename (0, k, stripName (k)); else startRename (1, k - beat::numPads + 1, stripName (k));
+                return;
+            }
+        // envelope nuqtasini standart holatga qaytarish
+        if (const int n = envNodeAt (e.position); n >= 0)
+        {
+            auto v = plugin.pad (sel); auto* um = plugin.um();
+            if (envTab == 0) { if (n == 1) v.setProperty ("attack", 0.0, um); if (n == 2) v.setProperty ("hold", 0.0, um); if (n == 3) { v.setProperty ("env_dec", 0.0, um); v.setProperty ("sustain", 1.0, um); } if (n == 4) v.setProperty ("decay", 30.0, um); }
+            else { if (n == 0) v.setProperty ("pe_amt", 0.0, um); if (n == 1) { v.setProperty ("pe_d1", 60.0, um); v.setProperty ("pe_brk", 0.3, um); } if (n == 2) v.setProperty ("pe_d2", 300.0, um); }
+            refresh();
+        }
     }
     // sichqoncha g'ildiragi: step velocity / lane qiymati / pad gain
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
@@ -1285,6 +1638,7 @@ public:
             const double ng = juce::jlimit (-36.0, 12.0, (double) v["gain"] + (dy > 0 ? 0.5 : -0.5) * (e.mods.isShiftDown() ? 0.2 : 1.0));
             v.setProperty ("gain", ng, plugin.um());
             if (pp == sel) gainK.setValue (ng, juce::dontSendNotification);
+            padF[pp].setValue (ng, juce::dontSendNotification);
             info = "Pad " + juce::String (pp + 1) + " gain: " + juce::String (ng, 1) + " dB"; repaint();
             return;
         }
@@ -1296,8 +1650,10 @@ public:
         juce::PopupMenu m; m.addSectionHeader ("Pad " + juce::String (p + 1));
         m.addItem (1, U ("Sample yuklash...")); m.addItem (2, U ("Padni tozalash")); m.addSeparator();
         m.addItem (3, U ("Nusxa olish")); m.addItem (4, U ("Qo'yish"), copied.isValid());
+        m.addSeparator(); m.addItem (5, U ("Nomini o'zgartirish..."));
         m.showMenuAsync ({}, [this, p] (int r)
         {
+            if (r == 5) { auto rr = padRect (p); startRename (0, p, rr.withTrimmedTop (rr.getHeight() - 26).withHeight (24)); return; }
             if (r == 1) loadSmpB.triggerClick();
             if (r == 2) plugin.clearPad (p);
             if (r == 3) copied = plugin.pad (p).createCopy();
@@ -1452,7 +1808,10 @@ private:
         void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override { if (! e.mods.isCommandDown()) juce::Slider::mouseWheelMove (e, w); }
     };
     WSlider gainK, panK, tuneK, fineK, atkK, decK, dlyK, swingK, masterK;
-    WSlider busF[beat::numBuses], fxF, peAmtK, peD1K, peBrkK, peD2K, fCutK, fResK, fGainK;
+    WSlider busF[beat::numBuses], fxF, peAmtK, peD1K, peBrkK, peD2K, fCutK, fResK, fGainK, holdK, envDecK, susK;
+    WSlider padF[beat::numPads];
+    juce::TextEditor nameEd; int renameKind = 0, renameIdx = 0;
+    int envTab = 0, hoverNode = -1, dragNode = -1;
     juce::OwnedArray<juce::TextButton> laneTabs, fTypeB, fSlopeB; juce::ComboBox busBox;
     int lane = -1, hoverStep = -1, lastLaneStep = -1, lastLaneVal = 64;
 public:
@@ -1463,7 +1822,9 @@ public:
         auto v = plugin.pad (0); v.setProperty ("f_type", 1, nullptr); v.setProperty ("f_slope", 2, nullptr); v.setProperty ("f_cut", 1800.0, nullptr); v.setProperty ("f_res", 0.45, nullptr);
         v.setProperty ("pe_amt", 18.0, nullptr); v.setProperty ("pe_d1", 40.0, nullptr); v.setProperty ("pe_brk", 0.35, nullptr); v.setProperty ("pe_d2", 260.0, nullptr); v.setProperty ("bus", 1, nullptr);
         plugin.pad (2).setProperty ("bus", 2, nullptr); plugin.pad (3).setProperty ("bus", 3, nullptr);
-        refresh(); setLaneForTest (beat::laneCut);
+        v.setProperty ("hold", 25.0, nullptr); v.setProperty ("env_dec", 90.0, nullptr); v.setProperty ("sustain", 0.45, nullptr); v.setProperty ("decay", 60.0, nullptr);
+        renameBus (1, "Barabanlar"); renameBus (2, "Perkussiya");
+        refresh();
     }
     void setLaneForTest (int l) { laneTabs[l + 1]->setToggleState (true, juce::sendNotification); lane = l; repaint(); }
 private:

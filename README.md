@@ -6,6 +6,17 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.12.0: AZ BEAT — pad mikseri · nomlar · Battery uslubidagi envelope
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Mikser | 20 pad kanali (har sample'ning o'z faderi, metri, M / S, chiqish: Master yoki Bus 1–4) + Bus 1–4, FX, Master; fader, g'ildirak, ikki marta bosish = 0 dB |
+| Nomlar | Pad, sekvenser qatori, mikser kanali va shina nomini ikki marta bosib yozish / o'zgartirish (pad menyusida ham) |
+| To'lqin muharriri | Battery kabi: to'lqin ustida AMP ENV (Attack, Hold, Decay, Sustain, Release nuqtalari) va PITCH ENV (Amount, Break, Decay 1/2) — sudrab boshqariladi; ikki marta bosish = standart |
+| Ma'lumot qatori | "pad N: fayl · oneshot length (seconds)", START (namunada), uzunlik |
+| Amp Envelope paneli | ATTACK, HOLD, DECAY, SUSTAIN, RELEASE knoblari va egri chiziq |
+| Oyna | Birinchi ochilishda ekranga sig'adigan zoom avtomatik tanlanadi |
+
 ## 0.11.0: Bosh sahifa (Hub) · xavfsiz "Yangi loyiha" · AZ MUSIC Playlist
 
 | Bo'lim | Nima qilindi |
