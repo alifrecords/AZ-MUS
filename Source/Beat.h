@@ -2191,7 +2191,7 @@ private:
         dsStop.onClick = [this] { plugin.edit.getTransport().stop (false, false); };
         dsLatch.onClick = [this] { plugin.state.setProperty ("latch", dsLatch.getToggleState(), plugin.um()); };
         dsRec.onClick = [this] { plugin.recArm = dsRec.getToggleState(); };
-        addAndMakeVisible (dsNoteRange); dsNoteRange.addItem (U ("Trigger pattern (C0\xe2\x80\x93B0)"), 2); dsNoteRange.addItem (U ("Trigger o'chiq"), 1);
+        addAndMakeVisible (dsNoteRange); dsNoteRange.addItem (U ("Trigger pattern (C0\xe2\x80\x93" "B0)"), 2); dsNoteRange.addItem (U ("Trigger o'chiq"), 1);
         dsNoteRange.setTooltip (U ("NOTE RANGE: MIDI klaviaturada C0..B0 notalari 1..12 patternlarni tanlaydi"));
         dsNoteRange.onChange = [this] { plugin.state.setProperty ("trigMode", dsNoteRange.getSelectedId() == 2, plugin.um()); };
         addAndMakeVisible (dsSpeed); dsSpeed.addItem ("1/2x", 1); dsSpeed.addItem ("1x", 2); dsSpeed.addItem ("2x", 3);
