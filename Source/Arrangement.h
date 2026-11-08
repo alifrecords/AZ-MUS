@@ -463,6 +463,14 @@ public:
         {   // fayl sample rate'i DAW'nikidan farq qilsa: sariq belgi
             te::AudioFile af (app.engine, wc0->getSourceFileReference().getFile());
             const double dr = app.engine.getDeviceManager().getSampleRate();
+            if (AppEngine::isAltered (*wc0) && r.getWidth() > 130)
+            {   // tempo / ton o'zgartirilgan: ko'k belgi (o'ng tugma -> Asl holiga qaytarish)
+                String t = "SYNC";
+                if (std::abs (wc0->getPitchChange()) > 0.001f) t << " " << (wc0->getPitchChange() > 0 ? "+" : "") << roundToInt (wc0->getPitchChange());
+                auto bd = Rectangle<float> (head.getRight() - 38 - 54, head.getY() + 2, 50, 11);
+                g.setColour (Colour (0xff4ad6ff).withAlpha (0.9f)); g.fillRoundedRectangle (bd, 3);
+                label (g, t, bd, 7.5f, Colours::black, Justification::centred, 800);
+            }
             if (af.isValid() && dr > 0 && std::abs (af.getSampleRate() - dr) > 0.5 && r.getWidth() > 90)
             {
                 const String t = String (af.getSampleRate() / 1000.0, 1).replace (".0", "") + "k";
@@ -802,7 +810,8 @@ public:
     }
 
     std::function<void()> onDop, onRenderSel, onBounce, onQuantize;
-    std::function<void (te::WaveAudioClip&, double)> onConvertRate;   // sample rate konvertatsiyasi (0 = DAW formatiga)
+    std::function<void (te::WaveAudioClip&, double)> onConvertRate;
+    std::function<void (te::WaveAudioClip&)> onRestoreOriginal;   // sample rate konvertatsiyasi (0 = DAW formatiga)
     std::function<void (te::WaveAudioClip&)> onOpenAudioEditor;
     void showClipMenu (te::Clip& c)
     {
@@ -832,6 +841,8 @@ public:
             for (int i = 0; i < 4; ++i)
             { juce::PopupMenu::Item it (juce::String (rates[i], 0) + juce::String::fromUTF8 (" Hz   \xe2\x80\x94  ") + U (uses[i])); it.itemID = 31 + i; it.isTicked = std::abs (fr - rates[i]) < 0.5; sm.addItem (std::move (it)); }
             m.addSeparator();
+            { juce::PopupMenu::Item it (U ("Asl holiga qaytarish (tempo, ton, tezlik)")); it.itemID = 35; it.shortcutKeyDescription = "Ctrl+Shift+O";
+              it.isEnabled = AppEngine::isAltered (*wc); if (it.isEnabled) it.colour = juce::Colour (0xff4ad6ff); m.addItem (std::move (it)); }
             const bool mism = af.isValid() && std::abs (fr - dr) > 0.5;
             m.addSubMenu (U ("Formatni moslashtirish (sample rate)") + (mism ? U ("  (mos emas)") : juce::String()), sm);
         }
@@ -852,6 +863,7 @@ public:
             if (r == 11 && sp->onBounce) sp->onBounce();
             if (r == 12 && sp->onRenderSel) sp->onRenderSel();
             if (r == 13 && sp->onQuantize) sp->onQuantize();
+            if (r == 35 && sp->onRestoreOriginal) if (auto* wc = dynamic_cast<te::WaveAudioClip*> (cp.get())) sp->onRestoreOriginal (*wc);
             if (r >= 30 && r <= 34 && sp->onConvertRate)
                 if (auto* wc = dynamic_cast<te::WaveAudioClip*> (cp.get())) { const double rates[] = { 0, 44100, 48000, 88200, 96000 }; sp->onConvertRate (*wc, rates[r - 30]); }
             if (sp) sp->repaint();

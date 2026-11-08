@@ -135,6 +135,11 @@ public:
         mixer.onTracksReordered = [this] { refreshAll(); };
         inspector.onPluginToggled = [this] { mixer.rebuildIfNeeded(); };
         lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); else rateHint (f); };
+        lanes.onRestoreOriginal = [this] (te::WaveAudioClip& c)
+        {
+            juce::Array<te::WaveAudioClip*> cl; for (auto* x : selectedAudioClips()) cl.addIfNotAlreadyThere (x); cl.addIfNotAlreadyThere (&c);
+            toast (restoreClips (cl));
+        };
         lanes.onConvertRate = [this] (te::WaveAudioClip& c, double rate)
         {
             // tanlangan barcha audio kliplar (bosilgan klip ham) birga o'giriladi
@@ -233,6 +238,20 @@ public:
         if (skipped > 0) m << U (" \xc2\xb7 ") << skipped << U (" tasi allaqachon mos");
         if (failed > 0) m << U (" \xc2\xb7 ") << failed << U (" tasi xato: ") << err;
         return m;
+    }
+    juce::String restoreClips (const juce::Array<te::WaveAudioClip*>& clips)
+    {
+        if (! app.edit || clips.isEmpty()) return U ("Audio klip yo'q");
+        app.edit->getUndoManager().beginNewTransaction ("Asl holiga");
+        int n = 0; for (auto* c : clips) if (AppEngine::restoreOriginal (*c)) ++n;
+        lanes.repaint();
+        return n > 0 ? U ("Asl holiga qaytarildi: ") + juce::String (n) + U (" ta audio (asl tempi, tonalligi, tezligi)") : U ("Audio allaqachon asl holida");
+    }
+    void restoreAll()
+    {
+        juce::Array<te::WaveAudioClip*> cl;
+        if (app.edit) for (auto* t : te::getAudioTracks (*app.edit)) for (auto* c : t->getClips()) if (auto* w = dynamic_cast<te::WaveAudioClip*> (c)) cl.add (w);
+        toast (restoreClips (cl));
     }
     void convertAllToDaw()
     {
@@ -627,6 +646,12 @@ public:
         if (ctrl && code == 'T') { showAddTrackMenu(); return true; }
         if (ctrl && code == 'N') { menuItemSelected (1, 0); return true; }
         if (ctrl && shift && code == 'W') { menuItemSelected (8, 0); return true; }
+        if (ctrl && shift && code == 'O')
+        {
+            auto cl = selectedAudioClips();
+            if (cl.isEmpty()) restoreAll(); else toast (restoreClips (cl));
+            return true;
+        }
         if (ctrl && code == 'O') { menuItemSelected (2, 0); return true; }
         if (ctrl && code == 'I') { menuItemSelected (5, 0); return true; }
         if (ctrl && code == KP::downKey) { zoomTracks (1.25); return true; }
@@ -670,7 +695,7 @@ public:
             case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
             case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
                     add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); m.addSeparator();
-                    add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
+                    add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); add (48, "Barcha audiolarni asl holiga qaytarish (tempo, ton)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
             case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); add (66, "Mikserni alohida oynaga ajratish / qaytarish", "", mixerWindow != nullptr); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
@@ -731,6 +756,7 @@ public:
             case 71: showPluginManager(); break;
             case 44: openDop(); break;
             case 47: convertAllToDaw(); break;
+            case 48: restoreAll(); break;
             case 45: openRender(); break;
             case 46: quantizeSelected(); break;
             case 66: toggleMixerWindow(); break;

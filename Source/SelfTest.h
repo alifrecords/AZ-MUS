@@ -1295,6 +1295,41 @@ inline int runSelfTest (const juce::StringArray& args)
         check (az::dop::standardRates[0].rate == 44100 && az::dop::standardRates[3].rate == 96000, "Formatlar: 44.1 / 48 / 88.2 / 96 kHz");
     }
 
+    // ================= 0.15.1: import qilingan qo'shiq asl holida qoladi + "Asl holiga qaytarish"
+    {
+        auto ar = std::make_unique<az::AppEngine>(); ar->newProject (dir.getChildFile ("t151.azmus"));
+        auto& e = *ar->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        e.tempoSequence.getTempo (0)->setBpm (110.0);
+        const int sr = 44100, n = sr * 60; juce::AudioBuffer<float> b (2, n);
+        for (int i = 0; i < n; ++i) { const float v = 0.3f * std::sin (6.2831853f * 440.0f * i / sr) * (0.6f + 0.4f * std::sin (6.2831853f * 1.5f * i / sr)); b.setSample (0, i, v); b.setSample (1, i, v); }
+        const auto song = dir.getChildFile ("Azam aka - Andijon AFG.wav");
+        { juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (song), sr, 2, 16, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n); }
+        const auto fi = az::sync::analyse (ar->engine, song, 110.0);
+        auto& pf = ar->engine.getPropertyStorage().getPropertiesFile();
+        const auto sb = pf.getValue ("azSyncBpm"), sk = pf.getValue ("azSyncKey");
+        pf.setValue ("azSyncBpm", true); pf.setValue ("azSyncKey", true);
+        az::MediaBrowser mb (*ar);
+        auto* t = ar->addAudioTrack ("Song");
+        auto c = ar->importAudio (*t, song, te::TimePosition());
+        const auto msg = mb.applySync (*c, song);
+        std::printf ("       to'liq qo'shiq (60 s): fullTrack=%d loop=%d, sync: %s\n", (int) fi.fullTrack, (int) fi.loop, msg.toRawUTF8());
+        check (fi.fullTrack && ! fi.loop && ! az::AppEngine::isAltered (*c) && std::abs (c->getPosition().getLength().inSeconds() - 60.0) < 0.01,
+               "Import: to'liq qo'shiq BPM SYNC / KEY SYNC yoqiq bo'lsa ham asl tempi va tonalligida tushadi");
+        // qisqa loop baribir moslanadi, keyin bir tugma bilan asl holiga
+        c->setTimeStretchMode (te::TimeStretcher::soundtouchBetter); c->setAutoTempo (true); c->setPitchChange (-3.0f); c->setLength (te::TimeDuration::fromSeconds (40.0), true);
+        const bool alt = az::AppEngine::isAltered (*c);
+        az::AppEngine::restoreOriginal (*c);
+        check (alt && ! az::AppEngine::isAltered (*c) && std::abs (c->getPosition().getLength().inSeconds() - 60.0) < 0.01 && std::abs (c->getPitchChange()) < 0.001f,
+               "Asl holiga qaytarish: tempo, ton va uzunlik asl faylnikiga qaytdi");
+        const auto f = dir.getChildFile ("t151.wav"); ar->exportWav (f, 32);
+        juce::AudioBuffer<float> x; double xr = 0; az::dop::readFile (ar->engine, f, x, xr);
+        int z = 0; for (int i = (int) (10 * xr) + 1; i < (int) (11 * xr); ++i) if ((x.getSample (0, i - 1) < 0) != (x.getSample (0, i) < 0)) ++z;
+        std::printf ("       eksport: %.1f s, ton %.1f Hz (asl 440)\n", x.getNumSamples() / xr, z / 2.0);
+        check (std::abs (z / 2.0 - 440.0) < 2.0 && x.getNumSamples() / xr > 59.9 && x.getNumSamples() / xr < 63.0, "Eksportda ovoz asl balandligi (440 Hz) va uzunligida");
+        if (sb.isEmpty()) pf.removeValue ("azSyncBpm"); else pf.setValue ("azSyncBpm", sb);
+        if (sk.isEmpty()) pf.removeValue ("azSyncKey"); else pf.setValue ("azSyncKey", sk);
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

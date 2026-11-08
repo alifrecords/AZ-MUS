@@ -6,6 +6,15 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.15.1: Import qilingan audio asl holida · "Asl holiga qaytarish"
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Sabab | BPM SYNC / KEY SYNC uzun yozuvlarni ham "loop" deb hisoblab, tempo va tonallikni o'zgartirardi (ovoz yo'g'onlashib, cho'zilib qolardi) |
+| Tuzatish | 40 soniyadan uzun audio (to'liq qo'shiq, minus, vokal yozuv) hech qachon avtomatik cho'zilmaydi va transpozitsiya qilinmaydi; SYNC faqat qisqa loop/sample'larga |
+| Bir tugma | O'ng tugma → "Asl holiga qaytarish (tempo, ton, tezlik)" yoki Ctrl+Shift+O; Audio → "Barcha audiolarni asl holiga qaytarish" |
+| Belgi | Tempo yoki tonalligi o'zgartirilgan klipda ko'k "SYNC" (va "+3" kabi ton) belgisi |
+
 ## 0.15.0: Audio formatini DAW'ga moslashtirish (sample rate konvertatsiyasi)
 
 | Bo'lim | Nima qilindi |

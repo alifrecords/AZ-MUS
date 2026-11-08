@@ -540,6 +540,31 @@ public:
         return t.insertWaveClip (f.getFileNameWithoutExtension(), f, { { at, at + te::TimeDuration::fromSeconds (af.getLength()) }, {} }, false);
     }
 
+    // ---------------------------------------------------------------- audio "asl holiga" (tempo, pitch, tezlik)
+    static bool isAltered (te::WaveAudioClip& c)
+    {
+        return c.getAutoTempo() || c.getAutoPitch() || std::abs (c.getPitchChange()) > 0.001f || std::abs (c.getSpeedRatio() - 1.0) > 1e-6
+            || c.getTimeStretchMode() != te::TimeStretcher::disabled || c.getWarpTime();
+    }
+    // klipni asl tempi, tonalligi va tezligiga qaytaradi; uzunlik — asl fayldagi davomiylik (offset saqlanadi). Gain o'zgarmaydi
+    static bool restoreOriginal (te::WaveAudioClip& c)
+    {
+        const bool was = isAltered (c);
+        c.setAutoTempo (false); c.setAutoPitch (false); c.setWarpTime (false);
+        c.setPitchChange (0.0f);
+        if (std::abs (c.getSpeedRatio() - 1.0) > 1e-6) c.setSpeedRatio (1.0);
+        c.setTimeStretchMode (te::TimeStretcher::disabled);
+        te::AudioFile af (c.edit.engine, c.getSourceFileReference().getFile());
+        if (af.isValid())
+        {
+            const double fileLen = af.getLength(), off = juce::jmax (0.0, c.getPosition().getOffset().inSeconds());
+            const double want = juce::jmax (0.01, fileLen - off);
+            if (std::abs (c.getPosition().getLength().inSeconds() - want) > 0.001 && (was || c.getPosition().getLength().inSeconds() > want))
+                c.setLength (te::TimeDuration::fromSeconds (want), true);
+        }
+        return was;
+    }
+
     te::MidiClip::Ptr importMidi (te::AudioTrack& t, const juce::File& f, te::TimePosition at)
     {
         juce::FileInputStream in (f);

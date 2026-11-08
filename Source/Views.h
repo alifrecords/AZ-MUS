@@ -1444,6 +1444,8 @@ public:
         }
         if (! syncBpm() && ! syncKey()) return msg;
         auto fi = sync::analyse (app.engine, f, projBpm());
+        if (fi.fullTrack)   // to'liq qo'shiq: asl tempi va tonalligida qoladi
+            return msg + (msg.isEmpty() ? juce::String() : juce::String::fromUTF8 ("  \xc2\xb7  ")) + U ("to'liq yozuv \xe2\x80\x94 asl tempi va tonalligida qo'yildi");
         const auto arrow = juce::String::fromUTF8 (" \xe2\x86\x92 "), dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
         if (syncBpm() && fi.loop && fi.bpm > 0)
         {
@@ -1626,7 +1628,7 @@ private:
         std::unique_ptr<juce::AudioFormatReader> r (formats.createReaderFor (f));
         if (r == nullptr) { repaint(); return; }
         const double sr = r->sampleRate, len = (double) r->lengthInSamples / sr;
-        if (len < 90.0 && ! f.hasFileExtension ("mid;midi"))
+        if (len <= sync::maxLoopSec && ! f.hasFileExtension ("mid;midi"))
         {
             auto fi = sync::analyse (app.engine, f, projBpm(), &memBuf);
             sampleRmsDb = activeRmsDb (memBuf);

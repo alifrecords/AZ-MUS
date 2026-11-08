@@ -162,7 +162,9 @@ struct FileInfo
 {
     double lengthSec = 0, sampleRate = 48000, bpm = 0; bool bpmGuessed = false;
     KeyInfo key; bool drum = false, loop = false;
+    bool fullTrack = false;      // to'liq qo'shiq / uzun yozuv (> 40 s): hech qachon avtomatik cho'zilmaydi va transpozitsiya qilinmaydi
 };
+inline constexpr double maxLoopSec = 40.0;
 
 inline FileInfo analyse (te::Engine& e, const juce::File& f, double projBpm, juce::AudioBuffer<float>* outBuf = nullptr)
 {
@@ -173,7 +175,8 @@ inline FileInfo analyse (te::Engine& e, const juce::File& f, double projBpm, juc
     const auto name = f.getFileNameWithoutExtension();
     fi.drum = isDrumName (name);
     fi.bpm = bpmFromName (name);
-    fi.loop = fi.bpm > 0 || name.containsIgnoreCase ("loop") || (fi.lengthSec >= 1.9 && ! fi.drum) || (fi.drum && fi.lengthSec >= 1.9 && name.containsIgnoreCase ("loop"));
+    fi.fullTrack = fi.lengthSec > maxLoopSec;
+    fi.loop = ! fi.fullTrack && (fi.bpm > 0 || name.containsIgnoreCase ("loop") || (fi.lengthSec >= 1.9 && ! fi.drum) || (fi.drum && fi.lengthSec >= 1.9 && name.containsIgnoreCase ("loop")));
     if (fi.bpm <= 0 && fi.loop) { fi.bpm = guessBpmFromLength (fi.lengthSec, projBpm); fi.bpmGuessed = fi.bpm > 0; }
     fi.key = keyFromName (name);
     juce::AudioBuffer<float> tmp;
