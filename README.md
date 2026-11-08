@@ -6,6 +6,21 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.11.0: Bosh sahifa (Hub) · xavfsiz "Yangi loyiha" · AZ MUSIC Playlist
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Tuzatish | "Yangi loyiha" endi DAW'ni yiqitmaydi: avval loyiha oynasi yopiladi, keyin loyiha almashadi |
+| Ishga tushish | DAW oxirgi loyihaga avtomatik kirmaydi — Bosh sahifa ochiladi (fayl bilan ochilsa, to'g'ri o'sha loyiha) |
+| Profil | Artist yoki ijodiy guruh: rasm qo'yish, nom va kasb (ikki marta bosib o'zgartiriladi), ⇄ Artist / Guruh |
+| Yangi loyiha | Nom, BPM, tonallik va shablon tanlanadigan oyna (Ctrl+N) |
+| Loyihalar | Kartalar: aranjirovka xaritasi yoki o'z muqovangiz, BPM / tonallik, hajm, uzunlik, treklar soni; qidirish, saralash; o'ng tugma: muqova, nom, nusxa, papkada ko'rsatish, savat |
+| Shablonlar | Bo'sh, Vokal yozish, Aranjirovka (AZ BEAT bilan), Beat yasash, Mastering, Ovoz / Podkast |
+| Savat | O'chirilgan loyihalar: tiklash yoki butunlay o'chirish |
+| AZ MUSIC Playlist | az-playlist.pages.dev qo'shiqlari DAW ichida: muqovalar, BPM, tonallik, tinglash, to'lqin bo'ylab o'tish; "Shu qo'shiqdan loyiha" — qo'shiq BPM va tonalligi bilan, Referens trekda |
+| Vositalar | AZ BEAT bilan beat, Audio fayldan loyiha (BPM / tonallik avtomatik), Loyihani ochish |
+| Menyu | Fayl → Bosh sahifa (loyihani yopish), Ctrl+Shift+W |
+
 ## 0.10.1: AZ BEAT oynasi zoomi
 
 | Usul | Nima qiladi |

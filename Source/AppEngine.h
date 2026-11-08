@@ -378,9 +378,29 @@ public:
         edit = std::move (e);
         editFile = f;
         edit->playInStopEnabled = true;
-        engine.getPropertyStorage().getPropertiesFile().setValue ("azLastEdit", f.getFullPathName());
+        {
+            auto& pf = engine.getPropertyStorage().getPropertiesFile();
+            pf.setValue ("azLastEdit", f.getFullPathName());
+            juce::StringArray r; r.addLines (pf.getValue ("azRecent"));       // Bosh sahifa: so'nggi loyihalar
+            r.removeString (f.getFullPathName()); r.insert (0, f.getFullPathName());
+            while (r.size() > 40) r.remove (r.size() - 1);
+            pf.setValue ("azRecent", r.joinIntoString ("\n"));
+        }
         setupInputs();
         if (onEditChanged) onEditChanged();
+        sendChangeMessage();
+    }
+
+    // loyihani yopish (Bosh sahifaga qaytish): saqlaydi va Edit'ni o'chiradi.
+    // Diqqat: avval loyiha UI'si (MainComponent) yo'q qilinishi kerak.
+    void closeProject()
+    {
+        if (edit == nullptr) return;
+        saveIfPossible();
+        edit->getTransport().stop (false, true);
+        selection.deselectAll();
+        edit.reset();
+        editFile = juce::File();
         sendChangeMessage();
     }
 

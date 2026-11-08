@@ -4,6 +4,7 @@
 #pragma once
 #include "AppEngine.h"
 #include "Routing.h"
+static juce::Image img_for_test() { juce::Image i (juce::Image::RGB, 400, 400, true); juce::Graphics g (i); g.setGradientFill (juce::ColourGradient (juce::Colours::red, 0, 0, juce::Colours::blue, 400, 400, false)); g.fillAll(); return i; }
 using az::U;
 
 namespace testgen
@@ -1055,6 +1056,108 @@ inline int runSelfTest (const juce::StringArray& args)
             int padsOk = 0; for (int p = 0; p < az::beat::numPads; ++p) padsOk += ed.getLocalBounds().toFloat().contains (ed.padRect (p)) ? 1 : 0;
             check (bp->padPos[5].load() < 0 && ed.getWidth() == 1240 && ed.getHeight() == 888 && padsOk == 20 && ed.padRect (0).getY() > ed.padRect (19).getY(), "AZ BEAT muharriri: 20 pad (4x5), Nerve lane tablari, Buses/Pitch Env/Filter panellari");
         }
+    }
+
+    // ================= 0.11: Bosh sahifa (Hub), xavfsiz loyiha almashish, AZ MUSIC Playlist
+    {
+        auto ah = std::make_unique<az::AppEngine>();
+        auto& pf = ah->engine.getPropertyStorage().getPropertiesFile();
+        const auto recentBak = pf.getValue ("azRecent"), lastBak = pf.getValue ("azLastEdit");
+        // 1) "Yangi loyiha" yiqilishi: UI ochiq turganda loyiha almashishi -> endi UI avval yopiladi
+        const auto pA = az::AppEngine::projectsFolder().getChildFile ("zz_selftest_A.azmus"), pB = az::AppEngine::projectsFolder().getChildFile ("zz_selftest_B.azmus");
+        ah->newProject (pA);
+        bool okSwitch = true;
+        for (int round = 0; round < 3; ++round)
+        {
+            auto mc = std::make_unique<az::MainComponent> (*ah); mc->setSize (1400, 860);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (60);
+            mc->saveProjectSnapshot();
+            mc.reset();                                   // UI avval
+            ah->closeProject();                           // keyin Edit
+            okSwitch &= ah->edit == nullptr;
+            if (round % 2 == 0) ah->newProject (pB); else okSwitch &= ah->openProject (pA);
+            okSwitch &= ah->edit != nullptr;
+        }
+        check (okSwitch, "Loyiha almashish (yangi / ochish) UI yopilgandan keyin: DAW yiqilmaydi");
+        check (az::hub::metaFile (pA).existsAsFile() && (double) juce::JSON::parse (az::hub::metaFile (pA))["bpm"] > 0, "Hub: loyiha kartasi ma'lumoti (BPM, tonallik, uzunlik) saqlanadi");
+        // 2) ishga tushganda oxirgi loyihaga avtomatik kirmaydi (Hub), so'nggi ro'yxatda bor
+        juce::StringArray rec; rec.addLines (pf.getValue ("azRecent"));
+        check (rec.contains (pA.getFullPathName()) && rec.contains (pB.getFullPathName()), "Hub: so'nggi loyihalar ro'yxati");
+        ah->closeProject();
+        {
+            az::StartHub hb (*ah); hb.setSize (1600, 900);
+            hb.refreshProjects();
+            const int n0 = hb.numVisibleProjects();
+            check (hb.page == az::StartHub::home && n0 >= 2 && ah->edit == nullptr, "Hub: ishga tushganda bosh sahifa, loyihalar to'ri (" + juce::String (n0) + " ta)");
+            // savat
+            const bool tr = az::hub::moveToTrash (pB); hb.refreshProjects(); const int n1 = hb.numVisibleProjects();
+            const auto restored = az::hub::restoreFromTrash (az::hub::trashDir().getChildFile ("zz_selftest_B.azmus"));
+            hb.refreshProjects();
+            check (tr && n1 == n0 - 1 && restored.existsAsFile() && hb.numVisibleProjects() == n0, "Hub: savatga tashlash va tiklash");
+            // profil rasmi va muqova
+            auto img = juce::Image (juce::Image::RGB, 300, 200, true); { juce::Graphics g (img); g.fillAll (juce::Colours::orange); }
+            const auto imf = dir.getChildFile ("avatar.png"); az::hub::saveImage (img, imf);
+            const auto prof = az::hub::appDataDir().getChildFile ("profile.png"), profBak = prof.getSiblingFile ("profile.bak.png");
+            if (prof.existsAsFile()) prof.moveFileTo (profBak);
+            check (hb.setAvatarFromFile (imf) && hb.setProjectCover (pA, imf) && az::hub::readProject (pA).customCover, "Hub: artist / guruh rasmi va loyiha muqovasi qo'yiladi");
+            prof.deleteFile(); if (profBak.existsAsFile()) profBak.moveFileTo (prof);
+            hb.showNewDialog (2);
+            check (hb.isNewDialogVisible(), "Hub: Yangi loyiha oynasi (nom, BPM, tonallik, shablon)");
+        }
+        // 3) shablon: Aranjirovka
+        {
+            ah->newProject (dir.getChildFile ("tpl.azmus")); az::hub::applyTemplate (*ah, 2);
+            auto ts = te::getAudioTracks (*ah->edit);
+            bool beat = false; for (auto* t : ts) beat |= az::beatPluginOf (*t) != nullptr;
+            check (ts.size() == 7 && beat, "Shablon 'Aranjirovka': AZ BEAT + 6 trek");
+            ah->closeProject();
+        }
+        // 4) AZ MUSIC Playlist: playlist.json tahlili, mahalliy manbadan yuklash, tinglash, qo'shiqdan loyiha
+        {
+            auto pdir = dir.getChildFile ("pl"); pdir.createDirectory(); pdir.getChildFile ("music").createDirectory(); pdir.getChildFile ("media").createDirectory();
+            const int sr = 44100, n = sr * 2; juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i) { const float v = 0.3f * std::sin (6.2831853f * 220.0f * i / sr); b.setSample (0, i, v); b.setSample (1, i, v); }
+            { juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (pdir.getChildFile ("music/song1.wav")), sr, 2, 16, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n); }
+            az::hub::saveImage (img_for_test (), pdir.getChildFile ("media/song1-1.jpg"));
+            pdir.getChildFile ("playlist.json").replaceWithText (R"({"settings":{"artist":"AZIMXODJAYEV MUSIC"},"tracks":[
+                {"id":"song1","title":"Yashadim","genre":"Euro disco","bpm":91,"key":"A-minor","status":"open","audio":"music/song1.wav","duration":2.0,"media":[{"type":"image","src":"media/song1-1.jpg"}],"peaks":[0.3,0.7,0.5]},
+                {"id":"song2","title":"Kelajak","genre":"Pop","bpm":120,"key":"C-major","audio":"music/x.mp3","publishAt":"2999-01-01"},
+                {"id":"song3","title":"Intro","genre":"Pop","bpm":100,"key":"D-minor","introOnly":true,"intro":"music/song1.wav","audio":"music/full.mp3"}]})");
+            auto list = az::hub::parsePlaylist (pdir.getChildFile ("playlist.json").loadFileAsString());
+            check (list.size() == 2 && list[0].key == "A minor" && list[0].cover == "media/song1-1.jpg" && list[1].audio == "music/song1.wav" && list[0].peaks.size() == 3,
+                   "Playlist: playlist.json o'qiladi (BPM, tonallik, muqova; hali chiqmaganlar yashirin, intro-only)");
+            const auto oldBase = az::hub::playlistBase(); az::hub::playlistBase() = pdir.getFullPathName() + "/";
+            az::hub::playlistCache().getChildFile ("playlist.json").deleteFile();
+            {
+                az::StartHub hb (*ah); hb.setSize (1600, 900);
+                juce::File created; az::hub::Song createdSong;
+                hb.onCreateFromSong = [&] (const az::hub::Song& s, juce::File w) { created = w; createdSong = s; };
+                hb.setPage (az::StartHub::playlistPage);
+                for (int k = 0; k < 100 && hb.getSongs().size() < 2; ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                for (int k = 0; k < 100 && ! hb.getSongs()[0].coverImg.isValid(); ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                hb.playSong (0);
+                for (int k = 0; k < 100 && ! hb.isPlaying(); ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                check (hb.getSongs().size() == 2 && hb.getSongs()[0].coverImg.isValid() && hb.isPlaying(), "Playlist: ro'yxat, muqovalar va qo'shiq DAW ichida tinglanadi");
+                hb.createFromSongForTest (0);
+                for (int k = 0; k < 100 && created == juce::File(); ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+                check (created.existsAsFile() && createdSong.bpm == 91, "Playlist: 'Shu qo'shiqdan loyiha' (WAV, BPM 91, A minor)");
+            }
+            az::hub::playlistBase() = oldBase;
+            // haqiqiy mp3 (mavjud bo'lsa) WAV'ga o'giriladi
+            const juce::File mp3dir ("/home/claude/alifrecords/az-playlist/music");
+            if (mp3dir.isDirectory())
+                if (auto mp3s = mp3dir.findChildFiles (juce::File::findFiles, false, "*.mp3"); ! mp3s.isEmpty())
+                {
+                    const auto w = az::hub::ensureWav (mp3s[0], "zz_selftest_mp3");
+                    double srr = 0; juce::AudioBuffer<float> bb; const bool rd = w.existsAsFile() && az::dop::readFile (ah->engine, w, bb, srr);
+                    std::printf ("       mp3 -> wav: %s, %.1f s\n", mp3s[0].getFileName().toRawUTF8(), rd ? bb.getNumSamples() / srr : 0.0);
+                    check (rd && bb.getNumSamples() > srr && bb.getMagnitude (0, 0, bb.getNumSamples()) > 0.01f, "MP3 dekoder: Playlist qo'shig'i WAV'ga o'giriladi");
+                    w.deleteFile();
+                }
+        }
+        for (auto f : { pA, pB })
+        { az::hub::thumbFile (f).deleteFile(); az::hub::coverFile (f).deleteFile(); az::hub::metaFile (f).deleteFile(); f.deleteFile(); }
+        pf.setValue ("azRecent", recentBak); pf.setValue ("azLastEdit", lastBak);
     }
 
     app2.reset(); app.reset();

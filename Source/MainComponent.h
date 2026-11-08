@@ -7,6 +7,7 @@
 #include "AudioEditor.h"
 #include "PianoRoll.h"
 #include "Connections.h"
+#include "Hub.h"
 
 namespace az
 {
@@ -157,6 +158,52 @@ public:
         app.onEditChanged = nullptr; app.removeChangeListener (this); vs.removeChangeListener (this);
         pianoRoll.reset(); connections.reset(); dopWindow.reset(); renderWindow.reset();
         if (mixerWindow) { mixerWindow->clearContentComponent(); mixerWindow.reset(); }
+    }
+    // Bosh sahifa bilan aloqa (MainWindow o'rnatadi)
+    std::function<void()> onRequestNew, onRequestHome;
+    std::function<void (juce::File)> onRequestOpen;
+    // Bosh sahifa kartasi uchun: aranjirovka surati + BPM/tonallik/uzunlik
+    void saveProjectSnapshot()
+    {
+        if (! app.edit || app.editFile == juce::File()) return;
+        const auto key = app.edit->state.getProperty ("azKey", "A minor").toString();
+        hub::writeMeta (app.editFile, app.edit->tempoSequence.getTempo (0)->getBpm(), key, app.edit->getLength().inSeconds(), te::getAudioTracks (*app.edit).size());
+        // aranjirovka xaritasi: har trek — qator, har klip — trek rangidagi blok (ichida to'lqin/nota izi)
+        auto tracks = te::getAudioTracks (*app.edit);
+        int clips = 0; for (auto* t : tracks) clips += t->getClips().size();
+        if (clips == 0) { hub::thumbFile (app.editFile).deleteFile(); return; }    // bo'sh loyiha: namunaviy rasm qoladi
+        const int W = 480, H = 394;
+        juce::Image img (juce::Image::ARGB, W, H, true);
+        juce::Graphics g (img);
+        g.fillAll (juce::Colour (0xff141218));
+        const double len = juce::jmax (8.0, app.edit->getLength().inSeconds());
+        const int rows = juce::jlimit (1, 10, tracks.size());
+        const float pad = 14, rh = (H - 2 * pad) / (float) rows;
+        g.setColour (juce::Colours::white.withAlpha (0.04f));
+        for (int i = 1; i < 8; ++i) g.drawVerticalLine (juce::roundToInt (pad + (W - 2 * pad) * i / 8.0f), pad, H - pad);
+        for (int r = 0; r < rows; ++r)
+        {
+            auto* t = tracks[r];
+            const auto col = t->getColour().isTransparent() ? trackColours[r % 8] : t->getColour();
+            for (auto* c : t->getClips())
+            {
+                const auto pos = c->getPosition();
+                const float x0 = pad + (float) (pos.getStart().inSeconds() / len) * (W - 2 * pad);
+                const float x1 = pad + (float) (pos.getEnd().inSeconds() / len) * (W - 2 * pad);
+                auto rc = juce::Rectangle<float> (x0, pad + r * rh + 3, juce::jmax (4.0f, x1 - x0 - 2), rh - 6);
+                g.setColour (col.withAlpha (0.55f)); g.fillRoundedRectangle (rc, 4);
+                g.setColour (col.withAlpha (0.95f)); g.fillRoundedRectangle (rc.withHeight (juce::jmin (5.0f, rc.getHeight() * 0.2f)), 2);
+                juce::Random rnd (c->itemID.getRawID() & 0x7fffffff);
+                g.setColour (juce::Colours::white.withAlpha (0.55f));
+                const bool midi = dynamic_cast<te::MidiClip*> (c) != nullptr;
+                for (float x = rc.getX() + 2; x < rc.getRight() - 2; x += midi ? 7.0f : 2.0f)
+                {
+                    if (midi) { const float y = rc.getY() + 7 + rnd.nextFloat() * (rc.getHeight() - 12); g.fillRect (x, y, 5.0f, 2.0f); }
+                    else { const float a = (0.15f + 0.85f * rnd.nextFloat()) * (rc.getHeight() - 10) * 0.45f; g.fillRect (x, rc.getCentreY() + 2 - a, 1.0f, a * 2); }
+                }
+            }
+        }
+        hub::saveImage (img, hub::thumbFile (app.editFile));
     }
     double sampleRate() const { auto sr = app.engine.getDeviceManager().getSampleRate(); return sr > 0 ? sr : 48000.0; }
     void savePrefs()
@@ -485,7 +532,8 @@ public:
         using KP = juce::KeyPress;
         const auto m = k.getModifiers();
         const bool ctrl = m.isCommandDown(), shift = m.isShiftDown(), alt = m.isAltDown();
-        const int code = k.getKeyCode();
+        int code = k.getKeyCode();
+        if (code >= 'a' && code <= 'z') code -= 'a' - 'A';       // Linux/macOS: Ctrl+harf kichik harf kodi bilan kelishi mumkin
         const auto ch = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
         auto plainKey = [&] (juce_wchar c) { return ! ctrl && ! alt && (code == (int) juce::CharacterFunctions::toUpperCase (c) || ch == c); };
 
@@ -537,6 +585,7 @@ public:
         if (ctrl && code == 'E') { splitAtCursor(); return true; }
         if (ctrl && code == 'T') { showAddTrackMenu(); return true; }
         if (ctrl && code == 'N') { menuItemSelected (1, 0); return true; }
+        if (ctrl && shift && code == 'W') { menuItemSelected (8, 0); return true; }
         if (ctrl && code == 'O') { menuItemSelected (2, 0); return true; }
         if (ctrl && code == 'I') { menuItemSelected (5, 0); return true; }
         if (ctrl && code == KP::downKey) { zoomTracks (1.25); return true; }
@@ -570,7 +619,7 @@ public:
         { juce::PopupMenu::Item it (U (t)); it.itemID = id; it.shortcutKeyDescription = juce::String::fromUTF8 (sc); it.isTicked = ticked; m.addItem (std::move (it)); };
         switch (idx)
         {
-            case 0: add (1, "Yangi loyiha", "Ctrl+N"); add (2, "Ochish...", "Ctrl+O"); m.addSeparator();
+            case 0: add (1, "Yangi loyiha...", "Ctrl+N"); add (2, "Ochish...", "Ctrl+O"); add (8, "Bosh sahifa (loyihani yopish)", "Ctrl+Shift+W"); m.addSeparator();
                     add (3, "Saqlash", "Ctrl+S"); add (4, "Boshqa nom bilan saqlash...", "Ctrl+Shift+S"); m.addSeparator();
                     add (5, "Audio import...", "Ctrl+I"); add (6, "WAV'ga eksport (mixdown)...", "Ctrl+Shift+E"); add (7, "WAV 32-bit float eksport (mastering uchun)..."); m.addSeparator(); add (9, "Chiqish"); break;
             case 1: add (10, "Bekor qilish (Undo)", "Ctrl+Z"); add (11, "Qaytarish (Redo)", "Ctrl+Y"); m.addSeparator();
@@ -598,9 +647,11 @@ public:
     {
         switch (id)
         {
-            case 1: app.newProject(); break;
-            case 2: chooseFile (U ("Loyihani ochish"), "*.azmus;*.tracktionedit", false, [this] (juce::File f) { if (! app.openProject (f)) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "AZ MUS", U ("Loyihani ochib bo'lmadi")); }); break;
-            case 3: app.saveIfPossible(); toast (U ("Saqlandi")); break;
+            // loyiha almashtirish faqat MainWindow orqali (UI avval yopiladi -> keyin Edit almashadi; DAW yiqilmaydi)
+            case 1: if (onRequestNew) onRequestNew(); break;
+            case 2: chooseFile (U ("Loyihani ochish"), "*.azmus;*.tracktionedit", false, [this] (juce::File f) { if (onRequestOpen) onRequestOpen (f); }); break;
+            case 8: if (onRequestHome) onRequestHome(); break;
+            case 3: app.saveIfPossible(); saveProjectSnapshot(); toast (U ("Saqlandi")); break;
             case 4: chooseFile (U ("Boshqa nom bilan saqlash"), "*.azmus", true, [this] (juce::File f) { app.saveAs (f); editChanged(); }); break;
             case 5: chooseFile (U ("Audio import"), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg", false, [this] (juce::File f) { insertFileAtCursor (f); }); break;
             case 6: exportMix(); break;

@@ -140,11 +140,11 @@ public:
 class MainWindow : public juce::DocumentWindow
 {
 public:
-    MainWindow (az::AppEngine& app)
-        : DocumentWindow ("AZ MUS", az::bg0, DocumentWindow::allButtons)
+    MainWindow (az::AppEngine& a, bool startWithHub)
+        : DocumentWindow ("AZ MUS", az::bg0, DocumentWindow::allButtons), app (a)
     {
         setUsingNativeTitleBar (true);
-        setContentOwned (new ZoomHost (app), false);
+        if (startWithHub || app.edit == nullptr) showHub(); else showProject();
         setResizable (true, false);
         setResizeLimits (1200, 720, 10000, 10000);
         centreWithSize (1680, 1000);
@@ -154,6 +154,87 @@ public:
         setVisible (true);
     }
     void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
+
+    // ---------------------------------------------------------------- Bosh sahifa <-> loyiha
+    ZoomHost* projectHost() const { return dynamic_cast<ZoomHost*> (getContentComponent()); }
+    az::StartHub* hub() const { return dynamic_cast<az::StartHub*> (getContentComponent()); }
+    void showHub()
+    {
+        auto* h = new az::StartHub (app);
+        h->onOpen = [this] (juce::File f) { switchProject ([this, f] { return app.openProject (f); }); };
+        h->onCreate = [this] (juce::File f, int templ, double bpm, juce::String key)
+        {
+            switchProject ([this, f, templ, bpm, key]
+            {
+                app.newProject (f);
+                az::hub::applyTemplate (app, templ);
+                app.edit->tempoSequence.getTempo (0)->setBpm (bpm);
+                app.edit->state.setProperty ("azKey", key, nullptr);
+                app.edit->getUndoManager().clearUndoHistory();
+                app.saveIfPossible();
+                return true;
+            });
+        };
+        h->onCreateFromSong = [this] (const az::hub::Song& s, juce::File wav)
+        {
+            const auto f = az::AppEngine::projectsFolder().getNonexistentChildFile (az::hub::sanitizeName (s.title), ".azmus", false);
+            switchProject ([this, f, s, wav] { return createWithAudio (f, wav, juce::String::fromUTF8 ("Referens: ") + s.title, s.bpm, s.key); });
+        };
+        h->onCreateFromAudio = [this] (juce::File audio)
+        {
+            const auto f = az::AppEngine::projectsFolder().getNonexistentChildFile (az::hub::sanitizeName (audio.getFileNameWithoutExtension()), ".azmus", false);
+            switchProject ([this, f, audio]
+            {
+                double bpm = 120; juce::String key;
+                const auto fi = az::sync::analyse (app.engine, audio, 120.0);
+                if (fi.bpm > 40) bpm = fi.bpm;
+                if (fi.key.valid()) key = az::sync::keyName (fi.key);
+                return createWithAudio (f, audio, audio.getFileNameWithoutExtension(), bpm, key);
+            });
+        };
+        setContentOwned (h, false);
+        setName (juce::String::fromUTF8 ("AZ MUS  \xc2\xb7  Bosh sahifa"));
+        juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<az::StartHub> (h)] { if (sp && ! sp->hasKeyboardFocus (true)) sp->grabKeyboardFocus(); });
+    }
+    bool createWithAudio (const juce::File& f, const juce::File& audio, const juce::String& trackName, double bpm, const juce::String& key)
+    {
+        const auto wav = az::hub::ensureWav (audio, audio.getFileNameWithoutExtension());
+        if (wav == juce::File()) return false;
+        app.newProject (f);
+        for (auto* t : te::getAudioTracks (*app.edit)) app.edit->deleteTrack (t);
+        if (auto* t = app.addAudioTrack (trackName)) app.importAudio (*t, wav, te::TimePosition());
+        app.addAudioTrack (juce::String::fromUTF8 ("Vokal"));
+        app.addInstrumentTrack ("Synth");
+        if (bpm > 0) app.edit->tempoSequence.getTempo (0)->setBpm (bpm);
+        if (key.isNotEmpty()) app.edit->state.setProperty ("azKey", key, nullptr);
+        app.edit->getUndoManager().clearUndoHistory();
+        app.saveIfPossible();
+        return true;
+    }
+    void showProject()
+    {
+        auto* zh = new ZoomHost (app);
+        zh->main.onRequestHome = [this] { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this)] { if (sp) sp->switchProject ({}); }); };
+        zh->main.onRequestNew  = [this] { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this)] { if (sp) { sp->switchProject ({}); if (auto* h = sp->hub()) h->showNewDialog (0); } }); };
+        zh->main.onRequestOpen = [this] (juce::File f) { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainWindow> (this), f] { if (sp) sp->switchProject ([p = sp.getComponent(), f] { return p->app.openProject (f); }); }); };
+        setContentOwned (zh, false);
+        zh->main.editChanged();
+        juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<az::MainComponent> (&zh->main)] { if (sp) sp->grabKeyboardFocus(); });
+    }
+    // xavfsiz almashish: 1) surat + saqlash, 2) loyiha UI'sini yo'q qilish, 3) Edit'ni yopish, 4) yangisini ochish
+    void switchProject (std::function<bool()> loader)
+    {
+        if (auto* zh = projectHost()) { zh->main.saveProjectSnapshot(); app.saveIfPossible(); }
+        clearContentComponent();
+        app.closeProject();
+        if (loader && loader() && app.edit != nullptr) showProject();
+        else
+        {
+            showHub();
+            if (loader) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "AZ MUS", juce::String::fromUTF8 ("Loyihani ochib bo'lmadi"));
+        }
+    }
+    az::AppEngine& app;
 };
 
 // ---------------------------------------------------------------- Ilova
@@ -204,15 +285,21 @@ public:
     {
         stopTimer();
         if (scan) scan->stopThread (8000);
+        if (mainWindow) mainWindow->clearContentComponent();   // UI avval, keyin Edit
         mainWindow.reset(); splash.reset(); app.reset();
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
-    void systemRequestedQuit() override { if (app) app->saveIfPossible(); quit(); }
+    void systemRequestedQuit() override
+    {
+        if (mainWindow) if (auto* zh = mainWindow->projectHost()) zh->main.saveProjectSnapshot();
+        if (app) app->saveIfPossible();
+        quit();
+    }
     void anotherInstanceStarted (const juce::String& cmd) override
     {
         const juce::File f (cmd.unquoted().trim());
-        if (app && f.existsAsFile()) app->openProject (f);
+        if (app && mainWindow && f.existsAsFile()) mainWindow->switchProject ([this, f] { return app->openProject (f); });
     }
 
 private:
@@ -266,11 +353,19 @@ private:
                 s.setStep (4, U ("Loyiha oynasi ochilmoqda\xe2\x80\xa6"), 0.95f);
                 const juce::File last (app->engine.getPropertyStorage().getPropertiesFile().getValue ("azLastEdit"));
                 juce::File arg; for (auto& a : args) if (a.unquoted().endsWith (".azmus")) arg = juce::File (a.unquoted());
-                if (! (arg.existsAsFile() && app->openProject (arg)) && ! (last.existsAsFile() && app->openProject (last)))
-                    app->newProject();
+                // Bosh sahifa: DAW oxirgi loyihaga avtomatik KIRMAYDI (faqat fayl bilan ochilsa yoki test --demo/--last)
+                bool opened = arg.existsAsFile() && app->openProject (arg);
+                if (! opened && (args.contains ("--demo") || args.contains ("--last")))
+                    if (! (last.existsAsFile() && app->openProject (last))) app->newProject();
                 if (args.contains ("--demo")) makeDemo (*app);
+                if (args.contains ("--playlistdir")) az::hub::playlistBase() = args[args.indexOf ("--playlistdir") + 1] + "/";
                 if (args.contains ("--mm")) if (auto* m = az::Routing (*app).monitorMatch (true)) { m->source = 1; m->target = 0; }   // test: A8X → Focal
-                mainWindow = std::make_unique<MainWindow> (*app);
+                mainWindow = std::make_unique<MainWindow> (*app, app->edit == nullptr);
+                if (auto* h = mainWindow->hub())
+                {
+                    if (args.contains ("--hubpage")) h->setPage ((az::StartHub::Page) args[args.indexOf ("--hubpage") + 1].getIntValue());
+                    if (args.contains ("--hubnew")) h->showNewDialog (2);
+                }
                 if (args.contains ("--size"))   // test: oyna o'lchami (masalan 1366x768)
                 {
                     auto sz = args[args.indexOf ("--size") + 1];
