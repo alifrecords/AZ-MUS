@@ -1024,6 +1024,31 @@ inline int runSelfTest (const juce::StringArray& args)
         std::printf ("       pitch: baza %.0f Hz, pitch lane 127 -> %.0f Hz; Pitch Env +12: boshi %.0f Hz, oxiri %.0f Hz\n", z0, zP, zE1, zE2);
         check (std::abs (z0 - 440) < 15 && std::abs (zP - 880) < 30, "Nerve 'pitch' lane: +12 st (bir oktava)");
         check (zE1 > 700 && std::abs (zE2 - 440) < 40, "Battery Pitch Envelope: Amount/Decay 1/Break/Decay 2");
+        // BEAT oynasi zoomi
+        {
+            auto ed = std::make_unique<az::BeatEditor> (*bp);
+            juce::DocumentWindow w ("zoom", juce::Colours::black, 0, false);
+            az::PluginFrame fr (*ed, w, bp);
+            const int w100 = fr.getWidth(), h100 = fr.getHeight();
+            fr.setZoom (1.5f); const int w150 = fr.getWidth(), h150 = fr.getHeight();
+            fr.setZoom (0.3f); const float zMin = fr.getZoom();
+            fr.stepZoom (+1); const float zStep = fr.getZoom();
+            fr.setZoom (1.0f);
+            const bool key = fr.zoomKey (juce::KeyPress ('=', juce::ModifierKeys::commandModifier, '+')); const float zKey = fr.getZoom();
+            fr.zoomKey (juce::KeyPress ('0', juce::ModifierKeys::commandModifier, '0'));
+            // sichqoncha nuqtasi zoomdan keyin ham to'g'ri joyga tushadimi (pad 1 markazi)
+            fr.setZoom (0.75f);
+            auto pc = ed->padRect (0).getCentre();
+            auto inFrame = fr.getLocalPoint (ed.get(), pc); auto back = ed->getLocalPoint (&fr, inFrame);
+            const float saved = (float) (double) bp->state.getProperty ("uiZoom", 0.0);
+            std::printf ("       zoom: 100%% %dx%d, 150%% %dx%d, min %.2f, qadam %.2f, Ctrl+ %.2f, saqlangan %.2f, pad1 %.0f,%.0f -> %.0f,%.0f\n",
+                         w100, h100, w150, h150, zMin, zStep, zKey, saved, inFrame.x, inFrame.y, back.x, back.y);
+            check (w100 == 1240 && h100 == 888 + az::PluginFrame::barH && w150 == 1860 && h150 == 1332 + az::PluginFrame::barH && std::abs (zMin - 0.5f) < 1e-3
+                   && std::abs (zStep - 0.67f) < 1e-3 && key && std::abs (zKey - 1.1f) < 1e-3 && std::abs (saved - 0.75f) < 1e-3
+                   && std::abs (inFrame.x - pc.x * 0.75f) < 1 && std::abs (inFrame.y - (pc.y * 0.75f + az::PluginFrame::barH)) < 1 && back.getDistanceFrom (pc) < 0.5f,
+                   "AZ BEAT oynasi zoom: 50%-200%, -/+/Ctrl, saqlanadi, sichqoncha nuqtalari to'g'ri");
+            fr.setZoom (1.0f);
+        }
         // muharrir: 20 pad, 8 lane tab, katta oyna
         {
             az::BeatEditor ed (*bp); ed.setLaneForTest (az::beat::laneCut);

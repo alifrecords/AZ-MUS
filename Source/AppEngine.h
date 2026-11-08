@@ -42,9 +42,34 @@ class PluginFrame : public juce::Component, private juce::Timer
 {
 public:
     static constexpr int barH = 30;
-    PluginFrame (juce::Component& c, juce::DocumentWindow& w) : content (c), window (w)
+    PluginFrame (juce::Component& c, juce::DocumentWindow& w, te::Plugin* zoomPlugin = nullptr) : content (c), window (w), zp (zoomPlugin)
     {
         addAndMakeVisible (content);
+        if (zp != nullptr)
+        {   // Zoom: oynani kichraytirish / kattalashtirish (−  100%  +, Ctrl+g'ildirak, Ctrl + / − / 0, burchakdan sudrash)
+            for (auto* b : { &zOutB, &zPctB, &zInB })
+            { addAndMakeVisible (b); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); b->getProperties().set ("radius", 5.0f); }
+            zOutB.setButtonText ("-"); zInB.setButtonText ("+");
+            zOutB.setTooltip (juce::String::fromUTF8 ("Kichraytirish (Ctrl - yoki Ctrl+g'ildirak)"));
+            zInB.setTooltip (juce::String::fromUTF8 ("Kattalashtirish (Ctrl + yoki Ctrl+g'ildirak)"));
+            zPctB.setTooltip (juce::String::fromUTF8 ("Zoom: bosing \xe2\x80\x94 tayyor o'lchamlar (Ctrl 0 = 100%)"));
+            zOutB.onClick = [this] { stepZoom (-1); };
+            zInB.onClick  = [this] { stepZoom (+1); };
+            zPctB.onClick = [this]
+            {
+                juce::PopupMenu m;
+                for (int pc : { 50, 67, 75, 90, 100, 110, 125, 150, 175, 200 })
+                    m.addItem (pc, juce::String (pc) + "%", true, juce::roundToInt (zoom * 100) == pc);
+                m.addSeparator(); m.addItem (1000, juce::String::fromUTF8 ("Ekranga moslash"));
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&zPctB), [this] (int r)
+                {
+                    if (r == 1000) fitToScreen(); else if (r > 0) setZoom (r / 100.0f);
+                });
+            };
+            addMouseListener (this, true);
+            baseW = content.getWidth(); baseH = content.getHeight();
+            zoom = juce::jlimit (minZoom, maxZoom, (float) (double) zp->state.getProperty ("uiZoom", 1.0));
+        }
         for (auto* b : { &playB, &stopB, &startB, &pinB })
         { addAndMakeVisible (b); b->setWantsKeyboardFocus (false); b->setMouseClickGrabsKeyboardFocus (false); b->getProperties().set ("radius", 5.0f); }
         playB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xb6")); stopB.setButtonText (juce::String::fromUTF8 ("\xe2\x96\xa0"));
@@ -60,14 +85,66 @@ public:
         pinB.onClick = [this] { pluginWindowPinDefault = pinB.getToggleState(); applyPin(); };
         updatePinText();
         content.setTopLeftPosition (0, barH);
-        setSize (juce::jmax (360, content.getWidth()), content.getHeight() + barH);
+        if (zp != nullptr) { content.setTopLeftPosition (0, 0); applyZoomTransform(); updatePct(); }
+        resizing = true; setSize (frameW(), frameH()); resizing = false;
         startTimerHz (6);
+    }
+    // ---------------------------------------------------------------- zoom
+    static constexpr float minZoom = 0.5f, maxZoom = 2.0f;
+    bool isZoomable() const { return zp != nullptr; }
+    float getZoom() const { return zoom; }
+    int frameW() const { return juce::jmax (360, zp ? juce::roundToInt (baseW * zoom) : content.getWidth()); }
+    int frameH() const { return (zp ? juce::roundToInt (baseH * zoom) : content.getHeight()) + barH; }
+    void applyZoomTransform() { content.setTransform (juce::AffineTransform::scale (zoom).translated (0.0f, (float) barH)); }
+    void updatePct() { zPctB.setButtonText (juce::String (juce::roundToInt (zoom * 100)) + "%"); }
+    void setZoom (float z, bool resizeWindow = true)
+    {
+        if (zp == nullptr) return;
+        z = juce::jlimit (minZoom, maxZoom, z);
+        zoom = z; applyZoomTransform(); updatePct();
+        zp->state.setProperty ("uiZoom", (double) zoom, nullptr);
+        if (resizeWindow) { resizing = true; setSize (frameW(), frameH()); resizing = false; }
+        repaint();
+    }
+    void stepZoom (int dir)
+    {
+        static const float steps[] = { 0.5f, 0.67f, 0.75f, 0.8f, 0.9f, 1.0f, 1.1f, 1.25f, 1.5f, 1.75f, 2.0f };
+        if (dir > 0) { for (float s : steps) if (s > zoom + 0.005f) { setZoom (s); return; } }
+        else { for (int i = (int) std::size (steps) - 1; i >= 0; --i) if (steps[i] < zoom - 0.005f) { setZoom (steps[i]); return; } }
+    }
+    void fitToScreen()
+    {
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (window.getScreenBounds()))
+        {
+            auto ua = d->userArea.reduced (20);
+            setZoom (juce::jmin ((float) ua.getWidth() / baseW, (float) (ua.getHeight() - barH - 40) / baseH));
+            window.setTopLeftPosition (ua.getX(), ua.getY());
+        }
+    }
+    bool zoomKey (const juce::KeyPress& k)
+    {
+        if (zp == nullptr || ! k.getModifiers().isCommandDown()) return false;
+        const auto c = k.getTextCharacter(); const int kc = k.getKeyCode();
+        if (c == '+' || c == '=' || kc == juce::KeyPress::numberPadAdd) { stepZoom (+1); return true; }
+        if (c == '-' || c == '_' || kc == juce::KeyPress::numberPadSubtract) { stepZoom (-1); return true; }
+        if (c == '0' || kc == juce::KeyPress::numberPad0) { setZoom (1.0f); return true; }
+        return false;
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (zp == nullptr || ! e.mods.isCommandDown() || w.deltaY == 0) return;
+        const float f = std::pow (1.1f, (w.isReversed ? -w.deltaY : w.deltaY) * 4.0f);
+        setZoom (std::round (zoom * f * 100.0f) / 100.0f);
     }
     void applyPin() { window.setAlwaysOnTop (pinB.getToggleState()); updatePinText(); }
     void updatePinText() { pinB.setButtonText (juce::String::fromUTF8 (pinB.getToggleState() ? "\xe2\x9c\x93 Qotirilgan" : "Qotirish")); }
     void childBoundsChanged (juce::Component* c) override
     {
-        if (c == &content && ! resizing) { resizing = true; setSize (juce::jmax (360, content.getWidth()), content.getHeight() + barH); resizing = false; }
+        if (c == &content && ! resizing)
+        {
+            if (zp) { baseW = content.getWidth(); baseH = content.getHeight(); }
+            resizing = true; setSize (frameW(), frameH()); resizing = false;
+        }
     }
     void resized() override
     {
@@ -76,10 +153,25 @@ public:
         playB.setBounds (r.removeFromLeft (34)); r.removeFromLeft (3);
         stopB.setBounds (r.removeFromLeft (30));
         pinB.setBounds (r.removeFromRight (110));
+        if (zp)
+        {
+            r.removeFromRight (10);
+            zInB.setBounds (r.removeFromRight (26)); r.removeFromRight (2);
+            zPctB.setBounds (r.removeFromRight (54)); r.removeFromRight (2);
+            zOutB.setBounds (r.removeFromRight (26));
+            // oyna burchagidan sudralsa: zoom oyna o'lchamiga moslashadi
+            if (! resizing && (getWidth() != frameW() || getHeight() != frameH()) && baseW > 0)
+            {
+                const float z = juce::jlimit (minZoom, maxZoom, juce::jmin ((float) getWidth() / baseW, (float) (getHeight() - barH) / baseH));
+                zoom = z; applyZoomTransform(); updatePct(); zp->state.setProperty ("uiZoom", (double) zoom, nullptr);
+            }
+            return;
+        }
         if (! resizing && content.getY() != barH) content.setTopLeftPosition (0, barH);
     }
     void paint (juce::Graphics& g) override
     {
+        if (zp) g.fillAll (juce::Colour (0xff0e0c10));
         g.setColour (juce::Colour (0xff0e0c10)); g.fillRect (getLocalBounds().removeFromTop (barH));
         g.setColour (juce::Colours::white.withAlpha (0.07f)); g.drawHorizontalLine (barH - 1, 0, (float) getWidth());
     }
@@ -88,9 +180,10 @@ public:
         const bool pl = pluginWindowIsPlaying && pluginWindowIsPlaying();
         if (pl != wasPlaying) { wasPlaying = pl; playB.setColour (juce::TextButton::buttonColourId, pl ? juce::Colour (0xff1f9d5c) : juce::Colour (0xff1a181d)); }
     }
-    juce::TextButton playB, stopB, startB, pinB;
+    juce::TextButton playB, stopB, startB, pinB, zOutB, zPctB, zInB;
 private:
     juce::Component& content; juce::DocumentWindow& window; bool resizing = false, wasPlaying = false;
+    te::Plugin* zp = nullptr; float zoom = 1.0f; int baseW = 0, baseH = 0;
 };
 
 class PluginWindow : public juce::DocumentWindow
@@ -104,8 +197,14 @@ public:
             content = std::make_unique<PluginEditorContent> (*ext);
         else
             content = p.createEditor();
-        if (content) { frame = std::make_unique<PluginFrame> (*content, *this); setContentNonOwned (frame.get(), true); frame->applyPin(); }
-        setResizable (false, false);
+        const bool zoomable = content != nullptr && dynamic_cast<te::ExternalPlugin*> (&p) == nullptr && p.getPluginType() == juce::String ("azbeat");
+        if (content) { frame = std::make_unique<PluginFrame> (*content, *this, zoomable ? &p : nullptr); setContentNonOwned (frame.get(), true); frame->applyPin(); }
+        setResizable (zoomable, false);
+        if (zoomable && frame)
+        {   // burchakdan sudrab o'lchamni o'zgartirish (zoom 50%–200%, tomonlar nisbati saqlanadi)
+            setResizeLimits (360, 200, 4000, 3000);
+            if (auto* c = getConstrainer()) c->setFixedAspectRatio ((double) frame->getWidth() / juce::jmax (1, frame->getHeight()));
+        }
         setBoundsConstrained (getLocalBounds() + plugin.windowState->choosePositionForPluginWindow());
         setVisible (true); toFront (true);
     }
@@ -113,7 +212,11 @@ public:
     void closeButtonPressed() override { plugin.windowState->closeWindowExplicitly(); }
     void moved() override { plugin.windowState->lastWindowBounds = getBounds(); }
     // plagin ishlatmagan klavishlar (Probel, Enter, raqamlar ...) DAW'ga uzatiladi
-    bool keyPressed (const juce::KeyPress& k) override { return pluginWindowKeys ? pluginWindowKeys (k) : false; }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (frame && frame->zoomKey (k)) return true;
+        return pluginWindowKeys ? pluginWindowKeys (k) : false;
+    }
     PluginFrame* getFrame() { return frame.get(); }
 private:
     te::Plugin& plugin;

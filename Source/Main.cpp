@@ -313,6 +313,21 @@ private:
                                 for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
                                     if (auto* be = find (juce::Desktop::getInstance().getComponent (i))) be->demoLanes();
                             });
+                        if (args.contains ("--beatzoom"))
+                        {
+                            const float z = args[args.indexOf ("--beatzoom") + 1].getFloatValue() / 100.0f;
+                            juce::Timer::callAfterDelay (2000, [z]
+                            {
+                                std::function<az::PluginFrame* (juce::Component*)> find = [&] (juce::Component* c) -> az::PluginFrame*
+                                {
+                                    if (auto* f = dynamic_cast<az::PluginFrame*> (c); f && f->isZoomable()) return f;
+                                    for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r;
+                                    return nullptr;
+                                };
+                                for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
+                                    if (auto* f = find (juce::Desktop::getInstance().getComponent (i))) { f->setZoom (z); if (auto* w = f->findParentComponentOfClass<juce::DocumentWindow>()) w->setTopLeftPosition (40, 40); }
+                            });
+                        }
                         if (args.contains ("--splitsync"))
                         {
                             const auto lf = juce::File ("/tmp/azmus_test/Beat_100bpm.wav");

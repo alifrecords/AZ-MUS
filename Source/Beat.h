@@ -1254,6 +1254,7 @@ public:
     // sichqoncha g'ildiragi: step velocity / lane qiymati / pad gain
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
+        if (e.mods.isCommandDown()) return;          // Ctrl+g'ildirak = oyna zoomi (PluginFrame)
         const float dy = (std::abs (w.deltaY) > std::abs (w.deltaX) ? w.deltaY : -w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
         if (dy == 0) return;
         const int stepAmt = e.mods.isShiftDown() ? 1 : 4;
@@ -1445,8 +1446,13 @@ private:
     juce::uint32 lastHitPaint = 0; int ticks = 0;
     juce::TextButton loadKitB, saveKitB, defaultB, sliceB, toMidiB, seqB, clearB, humanB, loadSmpB, revB, syncB, muteB, soloB;
     juce::ComboBox lenBox, rateBox, chokeBox;
-    juce::Slider gainK, panK, tuneK, fineK, atkK, decK, dlyK, swingK, masterK;
-    juce::Slider busF[beat::numBuses], fxF, peAmtK, peD1K, peBrkK, peD2K, fCutK, fResK, fGainK;
+    // Ctrl+g'ildirak — oyna zoomi uchun: knob/fader qiymatini o'zgartirmaydi
+    struct WSlider : juce::Slider
+    {
+        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override { if (! e.mods.isCommandDown()) juce::Slider::mouseWheelMove (e, w); }
+    };
+    WSlider gainK, panK, tuneK, fineK, atkK, decK, dlyK, swingK, masterK;
+    WSlider busF[beat::numBuses], fxF, peAmtK, peD1K, peBrkK, peD2K, fCutK, fResK, fGainK;
     juce::OwnedArray<juce::TextButton> laneTabs, fTypeB, fSlopeB; juce::ComboBox busBox;
     int lane = -1, hoverStep = -1, lastLaneStep = -1, lastLaneVal = 64;
 public:

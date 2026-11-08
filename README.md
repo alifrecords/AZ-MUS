@@ -6,6 +6,18 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.10.1: AZ BEAT oynasi zoomi
+
+| Usul | Nima qiladi |
+|---|---|
+| `-`  `100%`  `+` (oyna tepasida) | 50% – 200% oralig'ida bosqichma-bosqich kichraytirish / kattalashtirish |
+| `100%` tugmasi | Tayyor o'lchamlar (50, 67, 75, 90, 100, 110, 125, 150, 175, 200%) va "Ekranga moslash" |
+| Ctrl + g'ildirak | Ravon zoom (knob va faderlar bu paytda o'zgarmaydi) |
+| Ctrl `+` / Ctrl `-` / Ctrl `0` | Kattalashtirish / kichraytirish / 100% |
+| Oyna burchagini sudrash | Zoom oyna o'lchamiga moslashadi (nisbat saqlanadi) |
+
+Zoom loyihada saqlanadi — BEAT keyingi ochilishda shu o'lchamda chiqadi.
+
 ## 0.10.0: AZ BEAT — 20 pad · Nerve lane'lari · Battery Buses / Pitch Envelope / Filter-EQ
 
 | Bo'lim | Nima qo'shildi |
