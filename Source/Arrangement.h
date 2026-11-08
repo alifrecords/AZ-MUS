@@ -459,6 +459,18 @@ public:
         auto head = r.withHeight (15);
         { Graphics::ScopedSaveState s (g); g.reduceClipRegion (head.toNearestInt()); g.setColour (col.withAlpha (0.38f)); g.fillRoundedRectangle (r, 6); }
         label (g, c.getName(), head.reduced (6, 0), 9.5f, Colours::white, Justification::centredLeft, 600);
+        if (auto* wc0 = dynamic_cast<te::WaveAudioClip*> (&c))
+        {   // fayl sample rate'i DAW'nikidan farq qilsa: sariq belgi
+            te::AudioFile af (app.engine, wc0->getSourceFileReference().getFile());
+            const double dr = app.engine.getDeviceManager().getSampleRate();
+            if (af.isValid() && dr > 0 && std::abs (af.getSampleRate() - dr) > 0.5 && r.getWidth() > 90)
+            {
+                const String t = String (af.getSampleRate() / 1000.0, 1).replace (".0", "") + "k";
+                auto bd = Rectangle<float> (head.getRight() - 34, head.getY() + 2, 30, 11);
+                g.setColour (yellow.withAlpha (0.9f)); g.fillRoundedRectangle (bd, 3);
+                label (g, t, bd, 8, Colours::black, Justification::centred, 800);
+            }
+        }
         auto body = r.withTrimmedTop (16).reduced (2, 2);
 
         if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&c))
@@ -790,6 +802,7 @@ public:
     }
 
     std::function<void()> onDop, onRenderSel, onBounce, onQuantize;
+    std::function<void (te::WaveAudioClip&, double)> onConvertRate;   // sample rate konvertatsiyasi (0 = DAW formatiga)
     std::function<void (te::WaveAudioClip&)> onOpenAudioEditor;
     void showClipMenu (te::Clip& c)
     {
@@ -805,6 +818,23 @@ public:
         m.addItem (2, c.isMuted() ? U ("Ovozini yoqish") : U ("Ovozini o'chirish (mute)"));
         m.addItem (3, U ("Nusxa (Ctrl+D)"));
         if (dynamic_cast<te::MidiClip*> (&c)) m.addItem (5, U ("Piano roll'da ochish"));
+        if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&c))
+        {
+            // Formatni moslashtirish (SRC): fayl sample rate'i DAW'nikiga mos kelmasa
+            te::AudioFile af (app.engine, wc->getSourceFileReference().getFile());
+            const double fr = af.isValid() ? af.getSampleRate() : 0.0, dr = app.engine.getDeviceManager().getSampleRate() > 0 ? app.engine.getDeviceManager().getSampleRate() : 48000.0;
+            juce::PopupMenu sm;
+            sm.addSectionHeader (U ("Fayl: ") + juce::String (fr, 0) + " Hz" + (af.isValid() ? juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (af.getBitsPerSample()) + "-bit" : juce::String()) + U ("  \xc2\xb7  DAW: ") + juce::String (dr, 0) + " Hz");
+            { juce::PopupMenu::Item it (U ("DAW formatiga moslashtirish (") + juce::String (dr, 0) + " Hz)"); it.itemID = 30; it.isEnabled = std::abs (fr - dr) > 0.5; it.colour = std::abs (fr - dr) > 0.5 ? yellow : juce::Colour(); sm.addItem (std::move (it)); }
+            sm.addSeparator();
+            const double rates[] = { 44100, 48000, 88200, 96000 };
+            const char* uses[] = { "CD Audio, musiqa", "Video, kino, professional audio", "Hi-Resolution Audio", "Professional recording va sound design" };
+            for (int i = 0; i < 4; ++i)
+            { juce::PopupMenu::Item it (juce::String (rates[i], 0) + juce::String::fromUTF8 (" Hz   \xe2\x80\x94  ") + U (uses[i])); it.itemID = 31 + i; it.isTicked = std::abs (fr - rates[i]) < 0.5; sm.addItem (std::move (it)); }
+            m.addSeparator();
+            const bool mism = af.isValid() && std::abs (fr - dr) > 0.5;
+            m.addSubMenu (U ("Formatni moslashtirish (sample rate)") + (mism ? U ("  (mos emas)") : juce::String()), sm);
+        }
         m.addSeparator();
         m.addItem (4, U ("O'chirish  (Del)"));
         juce::Component::SafePointer<Lanes> sp (this);
@@ -822,6 +852,8 @@ public:
             if (r == 11 && sp->onBounce) sp->onBounce();
             if (r == 12 && sp->onRenderSel) sp->onRenderSel();
             if (r == 13 && sp->onQuantize) sp->onQuantize();
+            if (r >= 30 && r <= 34 && sp->onConvertRate)
+                if (auto* wc = dynamic_cast<te::WaveAudioClip*> (cp.get())) { const double rates[] = { 0, 44100, 48000, 88200, 96000 }; sp->onConvertRate (*wc, rates[r - 30]); }
             if (sp) sp->repaint();
         });
     }

@@ -134,7 +134,15 @@ public:
         headers.onTracksReordered = [this] { mixer.rebuild(); refreshAll(); };
         mixer.onTracksReordered = [this] { refreshAll(); };
         inspector.onPluginToggled = [this] { mixer.rebuildIfNeeded(); };
-        lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); };
+        lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); else rateHint (f); };
+        lanes.onConvertRate = [this] (te::WaveAudioClip& c, double rate)
+        {
+            // tanlangan barcha audio kliplar (bosilgan klip ham) birga o'giriladi
+            juce::Array<te::WaveAudioClip*> cl;
+            for (auto* x : selectedAudioClips()) cl.addIfNotAlreadyThere (x);
+            cl.addIfNotAlreadyThere (&c);
+            toast (convertRates (cl, rate > 0 ? rate : sampleRate()));
+        };
 
         auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
         showInsp = pf.getBoolValue ("azShowInsp", true); showMedia = pf.getBoolValue ("azShowMedia", true); showMixer = pf.getBoolValue ("azShowMixer", true);
@@ -205,6 +213,38 @@ public:
             }
         }
         hub::saveImage (img, hub::thumbFile (app.editFile));
+    }
+    // ---------------------------------------------------------------- sample rate moslashtirish
+    juce::String convertRates (const juce::Array<te::WaveAudioClip*>& clips, double toRate)
+    {
+        if (! app.edit || clips.isEmpty()) return U ("Audio klip yo'q");
+        app.edit->getUndoManager().beginNewTransaction ("Sample rate");
+        int done = 0, skipped = 0, failed = 0; juce::String err;
+        juce::MouseCursor::showWaitCursor();
+        for (auto* c : clips)
+        {
+            const double fr = dop::fileRate (app.engine, c->getSourceFileReference().getFile());
+            if (std::abs (fr - toRate) < 0.5) { ++skipped; continue; }
+            if (dop::convertClipRate (*c, toRate, &err)) ++done; else ++failed;
+        }
+        juce::MouseCursor::hideWaitCursor();
+        lanes.repaint();
+        juce::String m = U ("Format: ") + juce::String (done) + U (" ta audio ") + juce::String (toRate, 0) + U (" Hz / 24-bit WAV'ga o'girildi");
+        if (skipped > 0) m << U (" \xc2\xb7 ") << skipped << U (" tasi allaqachon mos");
+        if (failed > 0) m << U (" \xc2\xb7 ") << failed << U (" tasi xato: ") << err;
+        return m;
+    }
+    void convertAllToDaw()
+    {
+        juce::Array<te::WaveAudioClip*> cl;
+        if (app.edit) for (auto* t : te::getAudioTracks (*app.edit)) for (auto* c : t->getClips()) if (auto* w = dynamic_cast<te::WaveAudioClip*> (c)) cl.add (w);
+        toast (convertRates (cl, sampleRate()));
+    }
+    void rateHint (const juce::File& f)
+    {
+        const double fr = dop::fileRate (app.engine, f), dr = app.engine.getDeviceManager().getSampleRate();
+        if (fr > 0 && dr > 0 && std::abs (fr - dr) > 0.5)
+            toast (U ("Fayl ") + juce::String (fr, 0) + U (" Hz, DAW ") + juce::String (dr, 0) + U (" Hz \xe2\x80\x94 o'ng tugma \xe2\x86\x92 Formatni moslashtirish"));
     }
     double sampleRate() const { auto sr = app.engine.getDeviceManager().getSampleRate(); return sr > 0 ? sr : 48000.0; }
     void savePrefs()
@@ -630,7 +670,7 @@ public:
             case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
             case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
                     add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); m.addSeparator();
-                    add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
+                    add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
             case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); add (66, "Mikserni alohida oynaga ajratish / qaytarish", "", mixerWindow != nullptr); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
@@ -690,6 +730,7 @@ public:
                      } break;
             case 71: showPluginManager(); break;
             case 44: openDop(); break;
+            case 47: convertAllToDaw(); break;
             case 45: openRender(); break;
             case 46: quantizeSelected(); break;
             case 66: toggleMixerWindow(); break;
@@ -768,7 +809,7 @@ public:
             t = midi ? app.addInstrumentTrack (f.getFileNameWithoutExtension()) : app.addAudioTrack (f.getFileNameWithoutExtension());
         const auto at = app.edit->getTransport().getPosition();
         if (midi) app.importMidi (*t, f, at);
-        else if (auto c = app.importAudio (*t, f, at)) { if (auto m = media.applySync (*c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); }
+        else if (auto c = app.importAudio (*t, f, at)) { if (auto m = media.applySync (*c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); else rateHint (f); }
         selectTrack (t);
     }
     void openPianoRoll (te::MidiClip& c)

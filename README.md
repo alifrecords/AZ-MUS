@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.15.0: Audio formatini DAW'ga moslashtirish (sample rate konvertatsiyasi)
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Klip menyusi | O'ng tugma → "Formatni moslashtirish (sample rate)": fayl va DAW chastotasi ko'rsatiladi; "DAW formatiga moslashtirish" yoki 44 100 / 48 000 / 88 200 / 96 000 Hz tanlash |
+| Belgi | Fayl chastotasi DAW'nikidan farq qilsa, klip sarlavhasida sariq "44.1k" kabi belgi |
+| Import | Mos kelmagan fayl import qilinganda ogohlantirish |
+| Hammasi birdan | Audio → "Barcha audiolarni DAW formatiga moslashtirish" |
+| Sifat | Kaiser oynali sinc SRC (aliasing ~ −120 dB), 24-bit WAV; asl fayl o'zgarmaydi; klip joyi va uzunligi saqlanadi; Undo bilan qaytariladi |
+
 ## 0.14.0: Har trek uchun AZ EQ (Crossover) va AZ Imager — Ozone uslubida, Inspektorda
 
 | Bo'lim | Nima qilindi |

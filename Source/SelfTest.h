@@ -1256,6 +1256,45 @@ inline int runSelfTest (const juce::StringArray& args)
         check (true, "Inspektor ko'rinishlari: EQ/Crossover va Imager (vektorskop) chiziladi");
     }
 
+    // ================= 0.15: sample rate konvertatsiyasi (DAW formatiga moslashtirish)
+    {
+        auto as = std::make_unique<az::AppEngine>(); as->newProject (dir.getChildFile ("t15.azmus"));
+        auto& e = *as->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        auto mk = [&] (const juce::File& f, int sr, std::initializer_list<std::pair<double, float>> tones, double dur)
+        {
+            const int n = (int) (sr * dur); juce::AudioBuffer<float> b (2, n);
+            for (int i = 0; i < n; ++i) { float v = 0; for (auto [hz, a] : tones) v += a * std::sin ((float) (6.283185307 * hz * i / sr)); b.setSample (0, i, v); b.setSample (1, i, v); }
+            juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, 2, 16, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, n);
+        };
+        const auto f44 = dir.getChildFile ("cd44.wav"), f96 = dir.getChildFile ("hr96.wav");
+        mk (f44, 44100, { { 1000.0, 0.4f } }, 2.0);
+        mk (f96, 96000, { { 1000.0, 0.3f }, { 30000.0, 0.3f } }, 2.0);
+        auto* t = as->addAudioTrack ("SRC");
+        auto c = as->importAudio (*t, f44, te::TimePosition::fromSeconds (1.0));
+        const auto posBefore = c->getPosition();
+        juce::String err;
+        const bool ok = az::dop::convertClipRate (*c, 48000.0, &err);
+        const auto nf = c->getSourceFileReference().getFile();
+        juce::AudioBuffer<float> b; double sr = 0; az::dop::readFile (as->engine, nf, b, sr);
+        int z = 0; for (int i = (int) (0.5 * sr) + 1; i < (int) (1.5 * sr); ++i) if ((b.getSample (0, i - 1) < 0) != (b.getSample (0, i) < 0)) ++z;
+        const double hz = z / 2.0, lenS = b.getNumSamples() / sr;
+        std::printf ("       44.1 kHz -> %s: %.0f Hz, %d-bit?, uzunlik %.4f s, ton %.1f Hz, peak %.3f\n", nf.getFileName().toRawUTF8(), sr, 24, lenS, hz, b.getMagnitude (0, 4800, 48000));
+        check (ok && std::abs (sr - 48000.0) < 0.5 && std::abs (lenS - 2.0) < 0.003 && std::abs (hz - 1000.0) < 2.0 && std::abs (b.getMagnitude (0, 4800, 48000) - 0.4f) < 0.01f
+               && c->getPosition().getStart() == posBefore.getStart() && c->getPosition().getLength() == posBefore.getLength(),
+               "Sample rate: 44 100 -> 48 000 Hz (ton, uzunlik va klip joyi o'zgarmaydi)");
+        // 96k -> 44.1k: 30 kHz ton olib tashlanadi (aliasing yo'q), 1 kHz saqlanadi
+        const auto o = az::dop::convertFileRate (as->engine, f96, 44100.0);
+        juce::AudioBuffer<float> d; double sr2 = 0; az::dop::readFile (as->engine, o, d, sr2);
+        auto gz = [&] (double f) { const int s0 = (int) (0.5 * sr2), len = (int) sr2 / 2; const double w = 6.283185307 * f / sr2, k = 2 * std::cos (w); double q1 = 0, q2 = 0;
+                                   for (int i = 0; i < len; ++i) { const double q0 = k * q1 - q2 + d.getSample (0, s0 + i); q2 = q1; q1 = q0; }
+                                   return 20 * std::log10 (std::sqrt (q1 * q1 + q2 * q2 - q1 * q2 * k) / (len / 2) + 1e-12); };
+        const double l1k = gz (1000), alias = gz (44100.0 - 30000.0);   // 30 kHz -> 14.1 kHz alias bo'lardi
+        std::printf ("       96 kHz -> 44.1 kHz: 1 kHz %.1f dB, alias (14.1 kHz) %.1f dB\n", l1k, alias);
+        check (std::abs (sr2 - 44100) < 0.5 && std::abs (l1k - 20 * std::log10 (0.3)) < 0.3 && alias < -70, "Sample rate: 96k -> 44.1k sifatli (aliasing filtri)");
+        // standart chastotalar
+        check (az::dop::standardRates[0].rate == 44100 && az::dop::standardRates[3].rate == 96000, "Formatlar: 44.1 / 48 / 88.2 / 96 kHz");
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

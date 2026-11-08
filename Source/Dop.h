@@ -185,6 +185,92 @@ inline bool readFile (te::Engine& e, const juce::File& f, juce::AudioBuffer<floa
     return true;
 }
 
+// ---------------------------------------------------------------- sample rate konvertatsiyasi (SRC)
+struct RateInfo { double rate; const char* name; const char* use; };
+inline const RateInfo standardRates[] = {
+    { 44100, "44 100 Hz", "CD Audio, musiqa" },
+    { 48000, "48 000 Hz", "Video, kino, professional audio" },
+    { 88200, "88 200 Hz", "Hi-Resolution Audio" },
+    { 96000, "96 000 Hz", "Professional recording va sound design" },
+};
+inline juce::String rateText (double r) { return r >= 1000 ? juce::String (r / 1000.0, std::fmod (r, 1000.0) == 0 ? 0 : 1) + " kHz" : juce::String (r, 0) + " Hz"; }
+inline double fileRate (te::Engine& e, const juce::File& f)
+{
+    te::AudioFile af (e, f);
+    return af.isValid() ? af.getSampleRate() : 0.0;
+}
+// sifatli SRC: Kaiser oynali sinc (β = 9, 32 nol har tomonda), pasaytirishda kesish chastotasi
+// yangi Nyquist'ning 97% iga tushiriladi — aliasing ~ -90 dB, faza chiziqli, kechikish yo'q
+inline juce::AudioBuffer<float> resample (const juce::AudioBuffer<float>& in, double fromRate, double toRate)
+{
+    const int C = in.getNumChannels(), N = in.getNumSamples();
+    const double ratio = fromRate / toRate, cut = juce::jmin (1.0, 1.0 / ratio) * 0.97;
+    const int zeros = 32; const double halfW = zeros / cut;
+    const int P = 512, tableN = (int) std::ceil (halfW * P) + 2;
+    const double beta = 9.0;
+    auto bessel0 = [] (double x) { double s = 1, t = 1; for (int k = 1; k < 40; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; } return s; };
+    const double i0b = bessel0 (beta);
+    std::vector<float> table ((size_t) tableN);
+    for (int i = 0; i < tableN; ++i)
+    {
+        const double x = (double) i / P;
+        if (x >= halfW) { table[(size_t) i] = 0; continue; }
+        const double sx = cut * x, sinc = sx < 1e-9 ? 1.0 : std::sin (juce::MathConstants<double>::pi * sx) / (juce::MathConstants<double>::pi * sx);
+        const double r = x / halfW, kw = bessel0 (beta * std::sqrt (juce::jmax (0.0, 1.0 - r * r))) / i0b;
+        table[(size_t) i] = (float) (cut * sinc * kw);
+    }
+    const int outN = juce::jmax (1, (int) std::floor ((N - 1) / ratio) + 1);
+    juce::AudioBuffer<float> out (C, outN);
+    const int hw = (int) std::ceil (halfW);
+    for (int c = 0; c < C; ++c)
+    {
+        const float* x = in.getReadPointer (c); float* y = out.getWritePointer (c);
+        for (int n = 0; n < outN; ++n)
+        {
+            const double t = n * ratio; const int i0 = (int) std::floor (t);
+            double acc = 0;
+            const int k0 = juce::jmax (0, i0 - hw + 1), k1 = juce::jmin (N - 1, i0 + hw);
+            for (int k = k0; k <= k1; ++k)
+            {
+                const double pos = std::abs (t - k) * P; const int pi = (int) pos;
+                if (pi + 1 >= tableN) continue;
+                const float fr = (float) (pos - pi);
+                acc += x[k] * (table[(size_t) pi] + (table[(size_t) pi + 1] - table[(size_t) pi]) * fr);
+            }
+            y[n] = (float) acc;
+        }
+    }
+    return out;
+}
+// faylni yangi sample rate'ga o'girib, 24-bit WAV qilib yozadi. Natija: yangi fayl (yoki bo'sh — xato)
+inline juce::File convertFileRate (te::Engine& e, const juce::File& src, double toRate, juce::String* err = nullptr)
+{
+    juce::AudioBuffer<float> b; double sr = 0;
+    if (! readFile (e, src, b, sr) || sr <= 0) { if (err) *err = "o'qib bo'lmadi"; return {}; }
+    const auto tag = "_" + juce::String (juce::roundToInt (toRate / 100.0) / 10.0).replace (".0", "") + "k";
+    auto dir = src.getParentDirectory();
+    if (! dir.hasWriteAccess()) dir = AppEngine::projectsFolder().getChildFile ("Audio");
+    dir.createDirectory();
+    auto stem = src.getFileNameWithoutExtension();
+    for (auto t : { "_44.1k", "_48k", "_88.2k", "_96k" }) if (stem.endsWith (t)) stem = stem.dropLastCharacters ((int) strlen (t));
+    const auto dst = dir.getNonexistentChildFile (stem + tag, ".wav", false);
+    juce::AudioBuffer<float> out = std::abs (sr - toRate) < 0.5 ? b : resample (b, sr, toRate);
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (dst), toRate, (unsigned int) out.getNumChannels(), 24, {}, 0));
+    if (w == nullptr || ! w->writeFromAudioSampleBuffer (out, 0, out.getNumSamples())) { w.reset(); dst.deleteFile(); if (err) *err = "yozib bo'lmadi"; return {}; }
+    return dst;
+}
+// klip manbasini yangi sample rate'dagi faylga almashtirish (pozitsiya va offset soniyalarda — o'zgarmaydi)
+inline bool convertClipRate (te::WaveAudioClip& c, double toRate, juce::String* err = nullptr)
+{
+    const auto src = c.getSourceFileReference().getFile();
+    if (std::abs (fileRate (c.edit.engine, src) - toRate) < 0.5) return true;
+    const auto dst = convertFileRate (c.edit.engine, src, toRate, err);
+    if (dst == juce::File()) return false;
+    c.getSourceFileReference().setToFile (dst, te::SourceFileReference::PathStyle::chooseBest, false);
+    return true;
+}
+
 // region: klip ko'rinadigan qismi (fayl ichidagi soniyalar)
 inline void applyProc (const juce::ValueTree& p, juce::AudioBuffer<float>& b, double sr, juce::Range<double> region)
 {
