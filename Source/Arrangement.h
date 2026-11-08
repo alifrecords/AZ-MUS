@@ -435,8 +435,13 @@ public:
             if (y > H || y + vs.trackH < 0) continue;
             if (t->itemID == vs.selectedTrack) { g.setColour (red.withAlpha (0.035f)); g.fillRect (0.0f, y, W, (float) vs.trackH); }
             g.setColour (Colours::white.withAlpha (0.055f)); g.fillRect (0.0f, y + vs.trackH - 1, W, 1.0f);
-            for (auto* c : t->getClips()) drawClip (g, *c, *t);
+            for (auto* c : t->getClips()) if (! inDragPreview (*c)) drawClip (g, *c, *t);
             if (e.getTransport().isRecording() && app.isArmed (*t)) drawRecording (g, *t, y);
+        }
+        // sudralayotgan kliplar eng ustida
+        for (auto* t2 : tracks)
+            for (auto* c : t2->getClips()) if (inDragPreview (*c)) drawClipPreview (g, *c, *t2);
+        {
         }
         // kursor
         const float px = vs.secToX (tr.getPosition().inSeconds());
@@ -484,11 +489,27 @@ public:
         if (auto* wc = dynamic_cast<te::WaveAudioClip*> (&c))
         {
             auto& th = thumbFor (*wc);
-            if (th.isGeneratingProxy() || th.isOutOfDate()) { label (g, U ("To'lqin tayyorlanmoqda\xe2\x80\xa6"), body, 9, dim); return; }
-            Graphics::ScopedSaveState s (g); g.reduceClipRegion (body.toNearestInt());
             const auto pos = wc->getPosition();
             const double vis1 = jmax (vs.startSec, pos.getStart().inSeconds()), vis2 = jmin (vs.xToSec ((float) getWidth()), pos.getEnd().inSeconds());
             if (vis2 <= vis1) return;
+            if (th.isGeneratingProxy() || th.isOutOfDate())
+            {   // TE rasmi qayta tayyorlanayotgan bo'lsa ham to'lqin yo'qolmaydi: o'zimizning cho'qqi keshidan chiziladi (miltillash yo'q)
+                const auto src = wc->getSourceFileReference().getFile();
+                if (auto pk = peaksFor (src))
+                {
+                    Graphics::ScopedSaveState s (g); g.reduceClipRegion (body.toNearestInt());
+                    const double s1 = editToSourceTime (*wc, vis1), s2 = editToSourceTime (*wc, vis2);
+                    auto area = Rectangle<float> (vs.secToX (vis1), body.getY(), vs.secToX (vis2) - vs.secToX (vis1), body.getHeight()).toNearestInt();
+                    g.setColour (Colours::white.withAlpha (muted ? 0.25f : 0.85f));
+                    const float gain = wc->getGain();
+                    if (pk->ch > 1) { auto top = area.removeFromTop (area.getHeight() / 2); drawPeaks (g, top, *pk, 0, s1, s2, gain); drawPeaks (g, area, *pk, 1, s1, s2, gain); }
+                    else drawPeaks (g, area, *pk, 0, s1, s2, gain);
+                }
+                else label (g, U ("To'lqin tayyorlanmoqda\xe2\x80\xa6"), body, 9, dim);
+                return;
+            }
+            (void) peaksFor (wc->getSourceFileReference().getFile());     // zaxira keshni oldindan tayyorlab qo'yish (fon oqimida)
+            Graphics::ScopedSaveState s (g); g.reduceClipRegion (body.toNearestInt());
             const auto [t1, t2] = thumbRange (*wc, vis1, vis2);
             auto area = Rectangle<float> (vs.secToX (vis1), body.getY(), vs.secToX (vis2) - vs.secToX (vis1), body.getHeight()).toNearestInt();
             g.setColour (Colours::white.withAlpha (muted ? 0.25f : 0.85f));
@@ -602,12 +623,17 @@ public:
             app.selection.deselectAll();
             for (auto* c2 : copies) app.selection.addToSelection (c2);
         }
+        // Muhim: sudrash paytida model (Edit) o'zgartirilmaydi — faqat ko'rinish (ghost) chiziladi.
+        // Shu tufayli audio grafi har harakatda qayta qurilmaydi: ijro qaltiramaydi, "pomeh" yo'q.
+        // O'zgarish sichqoncha qo'yib yuborilganda bir marta qo'llanadi (mouseUp -> commitDrag).
         auto c = drag.clip;
         const double dt = (double) e.getDistanceFromDragStartX() / vs.pxPerSec;
+        drag.moved = true;
         if (drag.resizeEnd)
         {
             const auto end = snapTime (*app.edit, (drag.startTime + drag.origLen).inSeconds() + dt, vs, false, c.get());
-            if (end > drag.startTime + 0.05s) c->setEnd (end, true);
+            drag.pEnd = juce::jmax (drag.startTime + 0.05s, end);
+            drag.pStart = drag.startTime;
         }
         else if (drag.resizeStart)
         {
@@ -618,8 +644,7 @@ public:
             if (dynamic_cast<te::WaveAudioClip*> (c.get()) != nullptr)
                 minStart = te::TimePosition::fromSeconds (juce::jmax (0.0, drag.startTime.inSeconds() - drag.origOffset.inSeconds() / juce::jmax (0.01, c->getSpeedRatio())));
             ns = juce::jlimit (minStart, endT - 0.05s, ns);
-            c->setStart (ns, true, false);
-            c->setEnd (endT, false);
+            drag.pStart = ns; drag.pEnd = endT;
         }
         else if (drag.group.size() > 1)
         {
@@ -628,15 +653,85 @@ public:
             const auto shift = lead - drag.startTime;
             auto earliest = drag.groupStarts[0]; for (auto s : drag.groupStarts) earliest = juce::jmin (earliest, s);
             const auto safeShift = earliest + shift < te::TimePosition() ? te::TimePosition() - earliest : shift;
-            for (int i = 0; i < drag.group.size(); ++i) drag.group[i]->setStart (drag.groupStarts[i] + safeShift, false, true);
+            drag.pShift = safeShift; drag.pTrack = nullptr;
         }
         else
         {
-            c->setStart (snapMove (*app.edit, drag.startTime, dt, vs, c.get()), false, true);
-            if (auto* nt = trackAtY (e.y))
-                if (nt != c->getTrack()) c->moveTo (*nt);
+            drag.pShift = snapMove (*app.edit, drag.startTime, dt, vs, c.get()) - drag.startTime;
+            drag.pTrack = trackAtY (e.y);
         }
         repaint();
+    }
+    // sudrash natijasini modelga bir marta qo'llash
+    void commitDrag()
+    {
+        if (drag.clip == nullptr || ! drag.moved || ! app.edit) return;
+        auto c = drag.clip;
+        if (drag.resizeEnd) { if (drag.pEnd != c->getPosition().getEnd()) c->setEnd (drag.pEnd, true); }
+        else if (drag.resizeStart) { c->setStart (drag.pStart, true, false); c->setEnd (drag.pEnd, false); }
+        else if (drag.group.size() > 1)
+        { if (drag.pShift != te::TimeDuration()) for (int i = 0; i < drag.group.size(); ++i) drag.group[i]->setStart (drag.groupStarts[i] + drag.pShift, false, true); }
+        else
+        {
+            if (drag.pShift != te::TimeDuration()) c->setStart (drag.startTime + drag.pShift, false, true);
+            if (drag.pTrack != nullptr && drag.pTrack != c->getTrack()) c->moveTo (*drag.pTrack);
+        }
+    }
+    bool inDragPreview (te::Clip& c) const
+    {
+        if (drag.clip == nullptr || ! drag.moved) return false;
+        if (drag.resizeEnd || drag.resizeStart || drag.group.size() <= 1) return &c == drag.clip.get();
+        return drag.group.contains (&c);
+    }
+    // sudralayotgan klip: ko'chirishda siljitib, uzunlikda kesib chiziladi (model o'zgarmagan)
+    void drawClipPreview (juce::Graphics& g, te::Clip& c, te::AudioTrack& t)
+    {
+        using namespace juce;
+        const auto orig = clipRect (c);
+        if (drag.resizeEnd || drag.resizeStart)
+        {
+            const float x1 = vs.secToX (drag.pStart.inSeconds()) + 1, x2 = vs.secToX (drag.pEnd.inSeconds()) - 1;
+            const auto pr = Rectangle<float> (x1, orig.getY(), jmax (4.0f, x2 - x1), orig.getHeight());
+            { Graphics::ScopedSaveState ss (g); g.reduceClipRegion (pr.expanded (0.5f).toNearestInt()); drawClip (g, c, t); }
+            if (pr.getRight() > orig.getRight() + 1 || pr.getX() < orig.getX() - 1)   // cho'zish: yangi qism (faqat ko'rinish)
+            {
+                g.setColour (t.getColour().withAlpha (0.14f));
+                if (pr.getRight() > orig.getRight()) g.fillRoundedRectangle (pr.withLeft (orig.getRight()), 4);
+                if (pr.getX() < orig.getX()) g.fillRoundedRectangle (pr.withRight (orig.getX()), 4);
+            }
+            g.setColour (Colours::white.withAlpha (0.85f)); g.drawRoundedRectangle (pr, 6, 1.4f);
+            label (g, hmsText ((drag.pEnd - drag.pStart).inSeconds()), pr.reduced (6, 2), 9, Colours::white, Justification::bottomRight, 700);
+            return;
+        }
+        // ko'chirish: asl joyida xira izi, yangi joyda klip
+        g.setColour (t.getColour().withAlpha (0.10f)); g.fillRoundedRectangle (orig, 6);
+        g.setColour (Colours::white.withAlpha (0.25f)); g.drawRoundedRectangle (orig, 6, 1.0f);
+        const float dx = (float) (drag.pShift.inSeconds() * vs.pxPerSec);
+        float dy = 0;
+        if (drag.pTrack != nullptr && drag.group.size() <= 1)
+            dy = (float) (trackY (*drag.pTrack) - trackY (t));
+        Graphics::ScopedSaveState ss (g);
+        g.addTransform (AffineTransform::translation (dx, dy));
+        drawClip (g, c, t);
+    }
+    static juce::String hmsText (double s) { return juce::String (s, 2) + " s"; }
+    // test: sudrash ko'rinishi modelni o'zgartirmasligi, qo'yib yuborilganda bir marta qo'llanishi
+    bool dragTest (te::Clip& c, double newEndSec, double shiftSec)
+    {
+        const auto origEnd = c.getPosition().getEnd(), origStart = c.getPosition().getStart();
+        drag = {}; drag.clip = &c; drag.startTime = origStart; drag.origLen = c.getPosition().getLength(); drag.resizeEnd = true; drag.moved = true;
+        drag.pStart = origStart; drag.pEnd = te::TimePosition::fromSeconds (newEndSec);
+        juce::Image im (juce::Image::ARGB, juce::jmax (100, getWidth()), juce::jmax (100, getHeight()), true); { juce::Graphics g (im); paintEntireComponent (g, false); }
+        const bool untouched = c.getPosition().getEnd() == origEnd;
+        commitDrag(); drag = {};
+        const bool resized = std::abs (c.getPosition().getEnd().inSeconds() - newEndSec) < 1e-6;
+        drag.clip = &c; drag.startTime = c.getPosition().getStart(); drag.moved = true; drag.pShift = te::TimeDuration::fromSeconds (shiftSec);
+        drag.group.add (&c); drag.groupStarts.add (drag.startTime);
+        { juce::Graphics g (im); paintEntireComponent (g, false); }
+        const bool untouched2 = c.getPosition().getStart() == origStart;
+        commitDrag(); drag = {};
+        const bool moved = std::abs (c.getPosition().getStart().inSeconds() - (origStart.inSeconds() + shiftSec)) < 1e-6;
+        return untouched && resized && untouched2 && moved;
     }
     void mouseUp (const juce::MouseEvent& e) override
     {
@@ -657,7 +752,9 @@ public:
                 if (at > drag.clip->getPosition().getStart() && at < drag.clip->getPosition().getEnd()) ct->splitClip (*drag.clip, at);
             repaint();
         }
+        commitDrag();
         drag = {};
+        repaint();
         updateCursor (e.position, e.mods);
     }
 
@@ -928,16 +1025,70 @@ private:
     ViewState& vs;
     bool dropHint = false;
     struct Drag { te::Clip::Ptr clip; te::TimePosition startTime; te::TimeDuration origLen, origOffset; te::AudioTrack* origTrack = nullptr; bool resizeEnd = false, resizeStart = false, copy = false, copied = false;
-                  juce::Array<te::Clip*> group; juce::Array<te::TimePosition> groupStarts; } drag;
-    std::map<te::EditItemID, std::unique_ptr<te::SmartThumbnail>> thumbs; std::map<te::EditItemID, juce::File> thumbFiles;
-
+                  juce::Array<te::Clip*> group; juce::Array<te::TimePosition> groupStarts;
+                  bool moved = false; te::TimePosition pStart, pEnd; te::TimeDuration pShift; te::AudioTrack* pTrack = nullptr; } drag;
+    // to'lqin rasmlari FAYL bo'yicha umumiy: kesilgan bo'laklar va nusxalar bir xil (allaqachon tayyor) rasmdan foydalanadi —
+    // kesgandan keyin "To'lqin tayyorlanmoqda..." miltillamaydi va fayl qayta o'qilmaydi
+public:
+    // ---- zaxira cho'qqi keshi (fayl bo'yicha, fon oqimida bir marta hisoblanadi)
+    struct Peaks { double sr = 0; int ch = 0, bin = 128; std::vector<float> mn[2], mx[2]; };
+    std::map<juce::String, std::shared_ptr<const Peaks>> peakCache; std::set<juce::String> peakPending;
+    const Peaks* peaksFor (const juce::File& f)
+    {
+        const auto key = f.getFullPathName() + "|" + juce::String (f.getLastModificationTime().toMilliseconds());
+        if (auto it = peakCache.find (key); it != peakCache.end()) return it->second.get();
+        if (peakPending.count (key) == 0 && f.existsAsFile())
+        {
+            peakPending.insert (key);
+            juce::Component::SafePointer<Lanes> sp (this); auto* eng = &app.engine;
+            juce::Thread::launch ([sp, eng, f, key]
+            {
+                auto pk = std::make_shared<Peaks>();
+                std::unique_ptr<juce::AudioFormatReader> r (eng->getAudioFileFormatManager().readFormatManager.createReaderFor (f));
+                if (r)
+                {
+                    pk->sr = r->sampleRate; pk->ch = (int) juce::jmin (2u, r->numChannels);
+                    const juce::int64 N = r->lengthInSamples; const int bins = (int) (N / pk->bin + 1);
+                    for (int c = 0; c < pk->ch; ++c) { pk->mn[c].assign ((size_t) bins, 0.0f); pk->mx[c].assign ((size_t) bins, 0.0f); }
+                    juce::AudioBuffer<float> b ((int) juce::jmax (1u, r->numChannels), pk->bin * 512);
+                    for (juce::int64 pos = 0; pos < N; pos += b.getNumSamples())
+                    {
+                        const int n = (int) std::min<juce::int64> (b.getNumSamples(), N - pos);
+                        r->read (&b, 0, n, pos, true, true);
+                        for (int i = 0; i < n; i += pk->bin)
+                        {
+                            const int cnt = juce::jmin (pk->bin, n - i); const size_t bi = (size_t) ((pos + i) / pk->bin);
+                            for (int c = 0; c < pk->ch; ++c) { auto mm = b.findMinMax (c, i, cnt); pk->mn[c][bi] = mm.getStart(); pk->mx[c][bi] = mm.getEnd(); }
+                        }
+                    }
+                }
+                juce::MessageManager::callAsync ([sp, key, pk] { if (sp) { sp->peakCache[key] = pk; sp->peakPending.erase (key); sp->repaint(); } });
+            });
+        }
+        return nullptr;
+    }
+    static void drawPeaks (juce::Graphics& g, juce::Rectangle<int> area, const Peaks& pk, int ch, double s1, double s2, float gain)
+    {
+        if (pk.sr <= 0 || area.getWidth() <= 0 || ch >= pk.ch) return;
+        const auto& mn = pk.mn[ch]; const auto& mx = pk.mx[ch];
+        const int nb = (int) mn.size(); const float cy = (float) area.getCentreY(), h = area.getHeight() * 0.5f;
+        for (int x = 0; x < area.getWidth(); ++x)
+        {
+            const double a = s1 + (s2 - s1) * x / area.getWidth(), b = s1 + (s2 - s1) * (x + 1) / area.getWidth();
+            int b0 = juce::jlimit (0, nb - 1, (int) (a * pk.sr / pk.bin)), b1 = juce::jlimit (b0, nb - 1, (int) (b * pk.sr / pk.bin));
+            float lo = 0, hi = 0; for (int k = b0; k <= b1; ++k) { lo = juce::jmin (lo, mn[(size_t) k]); hi = juce::jmax (hi, mx[(size_t) k]); }
+            lo = juce::jmax (-1.0f, lo * gain); hi = juce::jmin (1.0f, hi * gain);
+            g.fillRect ((float) (area.getX() + x), cy - hi * h, 1.0f, juce::jmax (1.0f, (hi - lo) * h));
+        }
+    }
+    te::SmartThumbnail& thumbForTest (te::WaveAudioClip& c) { return thumbFor (c); }
+private:
+    std::map<juce::String, std::unique_ptr<te::SmartThumbnail>> thumbs;
     te::SmartThumbnail& thumbFor (te::WaveAudioClip& c)
     {
-        auto& p = thumbs[c.itemID];
         const te::AudioFile f (c.getPlaybackFile());
+        auto& p = thumbs[f.getFile().getFullPathName()];
         if (p == nullptr) p = std::make_unique<te::SmartThumbnail> (app.engine, f, *this, app.edit.get());
-        else if (thumbFiles[c.itemID] != f.getFile()) p->setNewFile (f);
-        thumbFiles[c.itemID] = f.getFile();
         return *p;
     }
 };

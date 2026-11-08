@@ -1330,6 +1330,29 @@ inline int runSelfTest (const juce::StringArray& args)
         if (sk.isEmpty()) pf.removeValue ("azSyncKey"); else pf.setValue ("azSyncKey", sk);
     }
 
+    // ================= 0.15.2: sudrash/qisqartirish paytida audio grafi qayta qurilmaydi
+    {
+        auto ad = std::make_unique<az::AppEngine>(); ad->newProject (dir.getChildFile ("t152.azmus"));
+        auto& e = *ad->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        auto* t = ad->addAudioTrack ("D");
+        auto c = ad->importAudio (*t, dir.getChildFile ("Azam aka - Andijon AFG.wav"), te::TimePosition::fromSeconds (1.0));
+        auto mcd = std::make_unique<az::MainComponent> (*ad); mcd->setSize (1400, 860);
+        const bool ok = c != nullptr && mcd->getLanes().dragTest (*c, 20.0, 2.5);
+        check (ok, "Sudrash/qisqartirish: ko'rinish silliq (model faqat qo'yib yuborilganda bir marta o'zgaradi)");
+        // kesilgan bo'laklar bitta to'lqin rasmidan foydalanadi
+        auto* r = dynamic_cast<te::WaveAudioClip*> (t->splitClip (*c, te::TimePosition::fromSeconds (10.0)));
+        bool shared = r != nullptr && &mcd->getLanes().thumbForTest (*c) == &mcd->getLanes().thumbForTest (*r);
+        check (shared, "Kesilgan bo'laklar umumiy to'lqin rasmidan foydalanadi (qayta yuklanmaydi)");
+        {
+            auto& ln = mcd->getLanes(); const auto src = c->getSourceFileReference().getFile();
+            for (int k = 0; k < 200 && ln.peaksFor (src) == nullptr; ++k) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            auto* pk = ln.peaksFor (src);
+            check (pk != nullptr && pk->ch == 2 && pk->mx[0].size() > 1000 && *std::max_element (pk->mx[0].begin(), pk->mx[0].end()) > 0.2f,
+                   "Zaxira to'lqin keshi: TE rasmi yangilanayotganda ham to'lqin ko'rinib turadi");
+        }
+        mcd.reset();
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

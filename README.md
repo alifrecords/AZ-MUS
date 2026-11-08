@@ -6,6 +6,14 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.15.2: Kesish va qisqartirishda silliq ishlash (qaltirash / "zagruzka" yo'q)
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Sudrash / qisqartirish | Sudrash paytida loyiha modeli o'zgartirilmaydi — faqat ko'rinish chiziladi (uzunlik soniyalarda ko'rsatiladi); o'zgarish sichqoncha qo'yib yuborilganda bir marta qo'llanadi. Audio grafi har harakatda qayta qurilmaydi — ijro qaltiramaydi |
+| To'lqin rasmi | Fayl bo'yicha umumiy: kesilgan bo'laklar va nusxalar tayyor rasmdan foydalanadi |
+| Miltillash yo'q | Fon oqimida tayyorlanadigan zaxira to'lqin keshi: rasm yangilanayotganda ham to'lqin ko'rinib turadi ("To'lqin tayyorlanmoqda..." chiqmaydi) |
+
 ## 0.15.1: Import qilingan audio asl holida · "Asl holiga qaytarish"
 
 | Bo'lim | Nima qilindi |
