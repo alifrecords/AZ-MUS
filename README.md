@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.16.0: AZ BEAT — metrlar, ritm kutubxonasi va DRUM-SEQ (Transfuser)
+
+| Bo'lim | Nima qilindi |
+|---|---|
+| Metr (oyna tepasida) | 4/4, 3/4, 6/8, 5/4, 7/8 (2+2+3), 9/8 (2+2+2+3), 12/8, 7/4, triollar 1/8T va 1/16T — kataklar soni, guruh chegaralari va sanoq ("1 e & a", "1 & 2 & 3", "1 ta ta") shunga moslashadi; uzunlik 1–4 takt |
+| Ritm kutubxonasi | 24 uslub: Zamonaviy (House, Boom Bap, Trap, Dembow, Amapiano), Latino (Son va Rumba clave, Bossa nova, Salsa, Cumbia, Tresillo), Africano (Afrobeat, 6/8 bell, Bembe 12/8), Fors / Sharq (Fors 6/8, Maqsum, Saidi, Karsilama 9/8), O'zbek (Lazgi 6/8, Doira 6/8), notoq metrlar (5/4, 7/8, 7/4, Shuffle) |
+| DRUM-SEQ | ▶ / LATCH / ■ / ● (yozish); NOTE RANGE (C0–B0 notalari 1–12 patternni tanlaydi); GROOVE (6 shablon: 1/16 SW, 1/8 SW, Shuffle, Latino, Afro 6/8, MPC 58%) va SIMPLIFY; SPEED 1/2x · 1x · 2x; SYNC (darhol / zarb / takt) |
+| PATTERN | 12 slot, COPY / PASTE / CLEAR; "•" — slotda nota bor |
+| M.A.R.I.O. | DEPTH, ◀ ▶ variantlar, APPLY, TARGET (hammasi / steplar / velocity / ratchet / lane'lar / tanlangan pad); 0-variant — asl pattern |
+
 ## 0.15.2: Kesish va qisqartirishda silliq ishlash (qaltirash / "zagruzka" yo'q)
 
 | Bo'lim | Nima qilindi |

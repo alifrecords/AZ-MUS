@@ -421,6 +421,21 @@ private:
                                 for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
                                     if (auto* be = find (juce::Desktop::getInstance().getComponent (i))) be->demoLanes();
                             });
+                        if (args.contains ("--beatstyle"))
+                        {
+                            const int si = args[args.indexOf ("--beatstyle") + 1].getIntValue();
+                            juce::Timer::callAfterDelay (1700, [si]
+                            {
+                                std::function<az::BeatEditor* (juce::Component*)> find = [&] (juce::Component* c) -> az::BeatEditor*
+                                {
+                                    if (auto* be = dynamic_cast<az::BeatEditor*> (c)) return be;
+                                    for (auto* ch : c->getChildren()) if (auto* r = find (ch)) return r;
+                                    return nullptr;
+                                };
+                                for (int i = 0; i < juce::Desktop::getInstance().getNumComponents(); ++i)
+                                    if (auto* be = find (juce::Desktop::getInstance().getComponent (i))) be->applyStyleUI (si);
+                            });
+                        }
                         if (args.contains ("--beatzoom"))
                         {
                             const float z = args[args.indexOf ("--beatzoom") + 1].getFloatValue() / 100.0f;

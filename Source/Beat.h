@@ -8,21 +8,74 @@
 #pragma once
 #include <complex>
 #include "SampleSync.h"
+#include "BeatStyles.h"
 #include "Theme.h"
 
 namespace az
 {
 namespace beat
 {
-constexpr int numPads = 20, maxSteps = 64, firstNote = 36, numBuses = 4, numLanes = 7;
+constexpr int numPads = 20, maxSteps = 96, firstNote = 36, numBuses = 4, numLanes = 7;
 // Nerve kabi step-lane'lar (velocity alohida — "steps"): har step uchun 0..127
 inline const char* laneIds[]   = { "l_cut", "l_res", "l_pitch", "l_pan", "l_gate", "l_late", "l_fx" };
 inline const char* laneNames[] = { "cutoff", "resonance", "pitch", "pan", "gate", "late", "fx send" };
 inline const int   laneDef[]   = { 127, 0, 64, 64, 127, 0, 0 };
 enum Lane { laneCut = 0, laneRes, lanePitch, lanePan, laneGate, laneLate, laneFx };
 inline const juce::Identifier PAD ("PAD");
-inline const char* rateNames[] = { "1/16", "1/8", "1/32", "1/16T" };
-inline double rateBeats (int r) { return r == 1 ? 0.5 : r == 2 ? 0.125 : r == 3 ? 0.25 * 2.0 / 3.0 : 0.25; }
+inline const char* rateNames[] = { "1/16", "1/8", "1/32", "1/16T", "1/8T" };
+constexpr int numRates = 5;
+inline double rateBeats (int r) { return r == 1 ? 0.5 : r == 2 ? 0.125 : r == 3 ? 0.25 * 2.0 / 3.0 : r == 4 ? 1.0 / 3.0 : 0.25; }
+
+// ---------------------------------------------------------------- metrlar (o'lchov): kataklar soni, guruhlar, sanoq
+struct Meter { const char* name; int steps, rate; int groups[8]; int ng; int sub; };   // sub: guruh ichidagi sanoq birligi (2 = 1/8, 4 = 1/4, 3 = triplet)
+inline const Meter meters[] = {
+    { "4/4",            16, 0, { 4, 4, 4, 4 },          4, 4 },
+    { "3/4",            12, 0, { 4, 4, 4 },             3, 4 },
+    { "6/8",            12, 0, { 6, 6 },                2, 2 },
+    { "5/4",            20, 0, { 4, 4, 4, 4, 4 },       5, 4 },
+    { "7/8 (2+2+3)",    14, 0, { 4, 4, 6 },             3, 2 },
+    { "9/8 (2+2+2+3)",  18, 0, { 4, 4, 4, 6 },          4, 2 },
+    { "12/8",           24, 0, { 6, 6, 6, 6 },          4, 2 },
+    { "7/4",            28, 0, { 4, 4, 4, 4, 4, 4, 4 }, 7, 4 },
+    { "4/4 triol (1/8T)",  12, 4, { 3, 3, 3, 3 },       4, 3 },
+    { "4/4 triol (1/16T)", 24, 3, { 6, 6, 6, 6 },       4, 3 },
+};
+constexpr int numMeters = (int) std::size (meters);
+// step turi: 3 = takt boshi, 2 = guruh (zarb) boshi, 1 = ikkinchi darajali (1/8), 0 = mayda
+inline int stepLevel (int meter, int s)
+{
+    const auto& m = meters[juce::jlimit (0, numMeters - 1, meter)];
+    const int sb = ((s % m.steps) + m.steps) % m.steps;
+    if (sb == 0) return 3;
+    int acc = 0;
+    for (int g = 0; g < m.ng; ++g) { if (sb == acc) return 2; if (sb < acc + m.groups[g]) { const int in = sb - acc; return (m.sub == 3 ? false : in % 2 == 0) ? 1 : 0; } acc += m.groups[g]; }
+    return 0;
+}
+// sanoq yorlig'i: 4/4 -> "1 e & a 2 ..."; 6/8 -> "1 & 2 & 3 & 4 ..."; triol -> "1 ta ta 2 ..."
+inline juce::String countLabel (int meter, int s)
+{
+    const auto& m = meters[juce::jlimit (0, numMeters - 1, meter)];
+    const int sb = ((s % m.steps) + m.steps) % m.steps;
+    if (m.sub == 3) { const int per = m.steps / m.ng; return sb % per == 0 ? juce::String (sb / per + 1) : juce::String ((m.steps == 24 && sb % 2 == 1) ? "" : "ta"); }
+    if (m.sub == 2) return sb % 2 == 0 ? juce::String (sb / 2 + 1) : juce::String ("&");
+    const char* q[] = { "", "e", "&", "a" };
+    return sb % 4 == 0 ? juce::String (sb / 4 + 1) : juce::String (q[sb % 4]);
+}
+inline float stepImportance (int meter, int s)
+{
+    switch (stepLevel (meter, s)) { case 3: return 1.0f; case 2: return 0.8f; case 1: return 0.5f; default: return 0.28f; }
+}
+// groove shablonlari: har step uchun kechikish (step ulushi) va velocity koeffitsienti
+struct Groove { const char* name; int cycle; float off[6]; float vel[6]; };
+inline const Groove grooves[] = {
+    { "1/16 SW",          4, { 0, 0.33f, 0, 0.33f },             { 1, 0.78f, 0.92f, 0.8f } },
+    { "1/8 SW",           4, { 0, 0.16f, 0.33f, 0.2f },          { 1, 0.85f, 0.85f, 0.8f } },
+    { "Shuffle",          4, { 0, 0.5f, 0, 0.5f },               { 1, 0.7f, 0.95f, 0.7f } },
+    { "Latino (push)",    4, { 0, -0.1f, 0.12f, -0.06f },        { 1, 0.72f, 0.9f, 0.78f } },
+    { "Afro 6/8 (lilt)",  6, { 0, 0.14f, -0.05f, 0.1f, 0, 0.12f }, { 1, 0.74f, 0.86f, 0.8f, 0.95f, 0.76f } },
+    { "MPC 58%",          4, { 0, 0.16f, 0, 0.16f },             { 1, 0.88f, 0.95f, 0.88f } },
+};
+constexpr int numGrooves = (int) std::size (grooves);
 
 struct PadRT
 {
@@ -41,6 +94,7 @@ struct Snapshot
 {
     PadRT pads[numPads];
     bool seqOn = true, anySolo = false; int length = 16, rate = 0; float swing = 0, master = 1;
+    int meter = 0, grooveType = 0; float groove = 0, simplify = 0, speed = 1; bool trigMode = false, latch = true;
     float busGain[numBuses] { 1, 1, 1, 1 }, fxReturn = 0.35f;
 };
 
@@ -276,6 +330,108 @@ public:
     }
     std::atomic<int> playStep { -1 };
     std::atomic<juce::uint32> padHit[beat::numPads] {};
+    // ---- DRUM-SEQ (Transfuser): 12 ta pattern sloti, nota bilan tanlash, yozish
+    static constexpr int numSlots = 12, trigLo = 24;   // C0..B0
+    std::atomic<int> pendingSlot { -1 }, trigHeld { 0 };
+    std::atomic<bool> recArm { false };
+    int currentSlot() const { return juce::jlimit (0, numSlots - 1, (int) state.getProperty ("patSlot", 0)); }
+    juce::ValueTree bank()
+    {
+        auto b = state.getChildWithName ("BANK");
+        if (! b.isValid()) { b = juce::ValueTree ("BANK"); state.addChild (b, -1, nullptr); }
+        return b;
+    }
+    // joriy patternni (barcha padlar: steps, ratchet, lane'lar) ValueTree'ga yig'ish / undan tiklash
+    juce::ValueTree capturePattern()
+    {
+        juce::ValueTree t ("PAT");
+        for (int p = 0; p < beat::numPads; ++p)
+        {
+            auto v = pad (p);
+            t.setProperty ("s" + juce::String (p), v["steps"], nullptr); t.setProperty ("r" + juce::String (p), v["ratchet"], nullptr);
+            for (auto* l : beat::laneIds) if (v.hasProperty (l)) t.setProperty (juce::String (l) + juce::String (p), v[l], nullptr);
+        }
+        t.setProperty ("length", length(), nullptr); t.setProperty ("meter", state.getProperty ("meter", 0), nullptr); t.setProperty ("rate", state["rate"], nullptr);
+        return t;
+    }
+    void applyPattern (const juce::ValueTree& t, juce::UndoManager* u)
+    {
+        for (int p = 0; p < beat::numPads; ++p)
+        {
+            auto v = pad (p);
+            v.setProperty ("steps", t.getProperty ("s" + juce::String (p), juce::String::repeatedString ("0,", beat::maxSteps)), u);
+            v.setProperty ("ratchet", t.getProperty ("r" + juce::String (p), juce::String::repeatedString ("1,", beat::maxSteps)), u);
+            for (auto* l : beat::laneIds) { const auto k = juce::String (l) + juce::String (p); if (t.hasProperty (k)) v.setProperty (l, t[k], u); else v.removeProperty (l, u); }
+        }
+        if (t.hasProperty ("length")) { state.setProperty ("length", t["length"], u); state.setProperty ("meter", t["meter"], u); state.setProperty ("rate", t["rate"], u); }
+    }
+    static bool patternHasNotes (const juce::ValueTree& t)
+    {
+        for (int p = 0; p < beat::numPads; ++p) for (auto v : intList (t.getProperty ("s" + juce::String (p)).toString(), 0)) if (v > 0) return true;
+        return false;
+    }
+    bool slotHasNotes (int i)
+    {
+        if (i == currentSlot()) return patternHasNotes (capturePattern());
+        auto t = bank().getChildWithProperty ("i", i);
+        return t.isValid() && patternHasNotes (t);
+    }
+    // slotga o'tish: joriy pattern o'z slotida saqlanadi, yangisi yuklanadi (bo'sh slot — bo'sh pattern)
+    void selectSlot (int i, juce::UndoManager* u = nullptr)
+    {
+        i = juce::jlimit (0, numSlots - 1, i);
+        const int cur = currentSlot();
+        if (i == cur) return;
+        auto b = bank();
+        auto save = capturePattern(); save.setProperty ("i", cur, nullptr);
+        if (auto old = b.getChildWithProperty ("i", cur); old.isValid()) b.removeChild (old, nullptr);
+        b.addChild (save, -1, nullptr);
+        auto t = b.getChildWithProperty ("i", i);
+        if (t.isValid()) applyPattern (t, u);
+        else { juce::ValueTree empty ("PAT"); empty.setProperty ("length", length(), nullptr); empty.setProperty ("meter", state.getProperty ("meter", 0), nullptr); empty.setProperty ("rate", state["rate"], nullptr); applyPattern (empty, u); }
+        state.setProperty ("patSlot", i, u);
+        rebuildAll();
+    }
+    void pushRec (int step, int p, int vel)
+    {
+        int s1, n1, s2, n2; recFifo.prepareToWrite (1, s1, n1, s2, n2);
+        if (n1 > 0) { recQueue[(size_t) s1] = step * 100000 + p * 1000 + juce::jlimit (1, 127, vel); recFifo.finishedWrite (1); }
+    }
+    // metr tanlash: kataklar soni, tezlik (rate) va uzunlik (taktlar)
+    void setMeter (int m, int bars, juce::UndoManager* u)
+    {
+        m = juce::jlimit (0, beat::numMeters - 1, m); bars = juce::jlimit (1, 4, bars);
+        const auto& me = beat::meters[m];
+        while (me.steps * bars > beat::maxSteps && bars > 1) --bars;
+        state.setProperty ("meter", m, u); state.setProperty ("rate", me.rate, u); state.setProperty ("length", me.steps * bars, u);
+    }
+    // ritm kutubxonasidan uslub qo'yish (metr, groove va pattern)
+    void applyStyle (int i, juce::UndoManager* u)
+    {
+        if (i < 0 || i >= beat::numStyles) return;
+        const auto& st = beat::styles[i];
+        setMeter (st.meter, 1, u);
+        for (int p = 0; p < beat::numPads; ++p)
+        {
+            auto v = pad (p);
+            v.setProperty ("steps", juce::String::repeatedString ("0,", beat::maxSteps), u);
+            v.setProperty ("ratchet", juce::String::repeatedString ("1,", beat::maxSteps), u);
+        }
+        for (auto& r : st.rows)
+        {
+            if (r.pat == nullptr) break;
+            const juce::String pat (r.pat);
+            for (int k = 0; k < pat.length() && k < beat::maxSteps; ++k)
+            {
+                const char c = (char) pat[k];
+                if (const int v = beat::patChar (c); v > 0) { setStep (r.pad, k, v, u); if (c == '2' || c == '3') setRatchet (r.pad, k, c - '0'); }
+            }
+        }
+        state.setProperty ("grooveType", st.groove, u); state.setProperty ("groove", st.grooveAmt, u);
+        state.setProperty ("styleName", juce::String (st.cat) + " / " + st.name, u);
+        rebuildAll();
+    }
+    int bars() const { const auto& me = beat::meters[juce::jlimit (0, beat::numMeters - 1, (int) state.getProperty ("meter", 0))]; return juce::jmax (1, (int) std::round ((double) length() / me.steps)); }
 
     // ---- audio
     void applyToBuffer (const te::PluginRenderContext& fc) override
@@ -299,20 +455,39 @@ public:
         {
             if (fc.bufferForMidiMessages->isAllNotesOff) for (auto& v : voices) v.releasing = true;
             for (auto& m : *fc.bufferForMidiMessages)
+            {
+                const int nn = m.getNoteNumber();
+                if (nn >= trigLo && nn < trigLo + numSlots)   // Transfuser: nota diapazoni patternni tanlaydi (C0..B0)
+                {
+                    if (m.isNoteOn()) { pendingSlot = nn - trigLo; trigHeld = trigHeld.load() + 1; }
+                    else if (m.isNoteOff()) trigHeld = juce::jmax (0, trigHeld.load() - 1);
+                    continue;
+                }
                 if (m.isNoteOn())
                 {
-                    const int p = m.getNoteNumber() - beat::firstNote;
+                    const int p = nn - beat::firstNote;
                     if (p >= 0 && p < beat::numPads)
-                        trigger (*sn, p, m.getVelocity(), juce::jlimit (0, n - 1, juce::roundToInt ((m.getTimeStamp() + fc.midiBufferOffset) * outRate))
-                                                          + juce::jmax (0, (int) (sn->pads[p].delayMs * 0.001 * outRate)));
+                    {
+                        const int off = juce::jlimit (0, n - 1, juce::roundToInt ((m.getTimeStamp() + fc.midiBufferOffset) * outRate));
+                        trigger (*sn, p, m.getVelocity(), off + juce::jmax (0, (int) (sn->pads[p].delayMs * 0.001 * outRate)));
+                        if (recArm.load() && fc.isPlaying)   // ● yozish: urilgan pad eng yaqin stepga yoziladi
+                        {
+                            const double bpm = bpmCache.load(), rbr = beat::rateBeats (sn->rate) / juce::jmax (0.25f, sn->speed);
+                            const double at = fc.editTime.getStart().inSeconds() * bpm / 60.0 + off / outRate * bpm / 60.0;
+                            const int idx = (int) ((((long) std::llround (at / rbr)) % sn->length + sn->length) % sn->length);
+                            pushRec (idx, p, m.getVelocity());
+                        }
+                    }
                 }
+            }
         }
         // ichki sekvenser (Nerve)
-        if (sn->seqOn && fc.isPlaying)
+        const bool trigOk = ! sn->trigMode || sn->latch || trigHeld.load() > 0;
+        if (sn->seqOn && fc.isPlaying && trigOk)
         {
             const double bpm = bpmCache.load();
             const double b0 = fc.editTime.getStart().inSeconds() * bpm / 60.0, b1 = fc.editTime.getEnd().inSeconds() * bpm / 60.0;
-            const double rb = beat::rateBeats (sn->rate);
+            const double rb = beat::rateBeats (sn->rate) / juce::jmax (0.25f, sn->speed);
             const int L = sn->length;
             const double maxShift = 0.25 * bpm / 60.0 + beat::rateBeats (sn->rate);   // delay +-250 ms + late
             if (b1 > b0)
@@ -323,16 +498,24 @@ public:
                     if (base >= b1 + maxShift) break;
                     if (base < 0) continue;
                     const int idx = (int) (((k % L) + L) % L);
-                    const double swing = (idx % 2 == 1) ? sn->swing * rb * 0.5 : 0.0;
+                    const bool trip = sn->rate >= 3;
+                    const double swing = (! trip && idx % 2 == 1) ? sn->swing * rb * 0.5 : 0.0;
+                    const auto& gv = beat::grooves[sn->grooveType];
+                    const int gi = idx % gv.cycle;
+                    const double grooveOff = sn->groove * gv.off[gi] * rb;
+                    const float grooveVel = 1.0f + (gv.vel[gi] - 1.0f) * sn->groove;
+                    const float imp = beat::stepImportance (sn->meter, idx);
                     for (int p = 0; p < beat::numPads; ++p)
                     {
-                        const int vel = sn->pads[p].steps[idx];
+                        int vel = sn->pads[p].steps[idx];
                         if (vel == 0) continue;
+                        if (sn->simplify > 0.001f && imp * 0.75f + vel / 127.0f * 0.25f < sn->simplify * 0.95f) continue;   // SIMPLIFY: mayda zarblar olib tashlanadi
+                        vel = juce::jlimit (1, 127, juce::roundToInt (vel * grooveVel));
                         const int rat = juce::jmax (1, (int) sn->pads[p].ratchet[idx]);
                         for (int r = 0; r < rat; ++r)
                         {
                             const double late = sn->pads[p].lane[beat::laneLate][idx] / 127.0 * rb * 0.5;   // Nerve "late": step'ning yarmigacha
-                            const double at = base + swing + late + r * rb / rat + sn->pads[p].delayMs * 0.001 * bpm / 60.0;
+                            const double at = base + swing + grooveOff + late + r * rb / rat + sn->pads[p].delayMs * 0.001 * bpm / 60.0;
                             if (at < b0 || at >= b1) continue;
                             trigger (*sn, p, juce::jmax (1, vel - r * 12), juce::jlimit (0, n - 1, (int) ((at - b0) * 60.0 / bpm * outRate)), idx, rb * 60.0 / bpm);
                         }
@@ -392,6 +575,22 @@ private:
     void valueTreeChildRemoved (juce::ValueTree& a, juce::ValueTree& b, int i) override { te::Plugin::valueTreeChildRemoved (a, b, i); dirty = true; }
     void timerCallback() override
     {
+        // yozilgan zarblar (● REC) -> pattern
+        {
+            int a1, m1, a2, m2; recFifo.prepareToRead (recFifo.getNumReady(), a1, m1, a2, m2);
+            auto put = [this] (int code) { const int st = code / 100000, p = (code / 1000) % 100, vel = code % 1000; if (p < beat::numPads && st < beat::maxSteps) setStep (p, st, vel, um()); };
+            for (int i = 0; i < m1; ++i) put (recQueue[(size_t) (a1 + i)]);
+            for (int i = 0; i < m2; ++i) put (recQueue[(size_t) (a2 + i)]);
+            recFifo.finishedRead (m1 + m2);
+        }
+        // kutilayotgan pattern almashuvi: SYNC = Darhol / Zarb / Takt
+        if (const int ps = pendingSlot.load(); ps >= 0)
+        {
+            const int sync = (int) state.getProperty ("patSync", 2), stp = playStep.load();
+            const auto& me = beat::meters[juce::jlimit (0, beat::numMeters - 1, (int) state.getProperty ("meter", 0))];
+            const bool now = sync == 0 || stp < 0 || (sync == 2 && stp % me.steps == 0) || (sync == 1 && beat::stepLevel ((int) state.getProperty ("meter", 0), stp) >= 2);
+            if (now) { pendingSlot = -1; selectSlot (ps); }
+        }
         const double b = edit.tempoSequence.getTempo (0)->getBpm();
         if (std::abs (b - bpmCache.load()) > 1e-6) { bpmCache = b; dirty = true; }
         if (dirty) rebuildAll();
@@ -401,7 +600,13 @@ private:
         dirty = false;
         bpmCache = edit.tempoSequence.getTempo (0)->getBpm();
         auto s = std::make_shared<beat::Snapshot>();
-        s->seqOn = state["seqOn"]; s->length = length(); s->rate = juce::jlimit (0, 3, (int) state["rate"]);
+        s->seqOn = state["seqOn"]; s->length = length(); s->rate = juce::jlimit (0, beat::numRates - 1, (int) state["rate"]);
+        s->meter = juce::jlimit (0, beat::numMeters - 1, (int) state.getProperty ("meter", 0));
+        s->grooveType = juce::jlimit (0, beat::numGrooves - 1, (int) state.getProperty ("grooveType", 0));
+        s->groove = (float) juce::jlimit (0.0, 1.0, (double) state.getProperty ("groove", 0.0));
+        s->simplify = (float) juce::jlimit (0.0, 1.0, (double) state.getProperty ("simplify", 0.0));
+        { const int sp = juce::jlimit (0, 2, (int) state.getProperty ("speed", 1)); s->speed = sp == 0 ? 0.5f : sp == 2 ? 2.0f : 1.0f; }
+        s->trigMode = (bool) state.getProperty ("trigMode", false); s->latch = (bool) state.getProperty ("latch", true);
         s->swing = juce::jlimit (0.0f, 0.75f, (float) (double) state["swing"]);
         s->master = juce::Decibels::decibelsToGain ((float) (double) state["master"]);
         for (int b = 0; b < beat::numBuses; ++b) s->busGain[b] = juce::Decibels::decibelsToGain ((float) (double) state.getProperty ("bus" + juce::String (b + 1), 0.0), -80.0f);
@@ -646,10 +851,13 @@ private:
     std::atomic<double> bpmCache { 120.0 };
     double outRate = 48000; bool dirty = false;
     juce::AbstractFifo uiFifo { 64 }; std::array<int, 64> uiQueue {};
+public:
+    juce::AbstractFifo recFifo { 256 }; std::array<int, 256> recQueue {};
+private:
 };
 
 // =============================================================================  AZ BEAT muharriri
-class BeatEditor : public te::Plugin::EditorComponent, private juce::Timer, public juce::FileDragAndDropTarget, public juce::DragAndDropTarget
+class BeatEditor : public te::Plugin::EditorComponent, private juce::Timer, public juce::FileDragAndDropTarget, public juce::DragAndDropTarget, public FrameHeaderProvider
 {
 public:
     explicit BeatEditor (AzBeatPlugin& p) : plugin (p)
@@ -674,8 +882,9 @@ public:
         for (auto* b : { &seqB, &revB, &syncB, &muteB, &soloB, &normB }) b->setClickingTogglesState (true);
         normB.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (0.4f));
         seqB.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (0.4f));
-        addAndMakeVisible (lenBox); for (int l : { 16, 32, 48, 64 }) lenBox.addItem (juce::String (l) + " step", l);
-        addAndMakeVisible (rateBox); for (int i = 0; i < 4; ++i) rateBox.addItem (beat::rateNames[i], i + 1);
+        addAndMakeVisible (lenBox); for (int b = 1; b <= 4; ++b) lenBox.addItem (juce::String (b) + " takt", b);
+        lenBox.setTooltip (U ("Pattern uzunligi (taktlar) \xe2\x80\x94 kataklar soni metrga qarab"));
+        addAndMakeVisible (rateBox); for (int i = 0; i < beat::numRates; ++i) rateBox.addItem (beat::rateNames[i], i + 1);
         addAndMakeVisible (chokeBox); chokeBox.addItem ("Choke: -", 1); for (int i = 1; i <= 4; ++i) chokeBox.addItem ("Choke " + juce::String (i), i + 1);
         auto knob = [this] (juce::Slider& s, double lo, double hi, double step, const juce::String& suf, double mid = 0)
         {
@@ -702,7 +911,7 @@ public:
         soloB.onClick = [this] { plugin.pad (sel).setProperty ("solo", soloB.getToggleState(), plugin.um()); repaint(); };
         chokeBox.onChange = [this] { plugin.pad (sel).setProperty ("choke", chokeBox.getSelectedId() - 1, plugin.um()); };
         seqB.onClick = [this] { plugin.state.setProperty ("seqOn", seqB.getToggleState(), plugin.um()); };
-        lenBox.onChange = [this] { plugin.state.setProperty ("length", lenBox.getSelectedId(), plugin.um()); repaint(); };
+        lenBox.onChange = [this] { plugin.setMeter ((int) plugin.state.getProperty ("meter", 0), lenBox.getSelectedId(), plugin.um()); refresh(); };
         rateBox.onChange = [this] { plugin.state.setProperty ("rate", rateBox.getSelectedId() - 1, plugin.um()); };
         clearB.onClick = [this]
         {
@@ -819,10 +1028,17 @@ public:
         refresh();
         holdK.textFromValueFunction = envDecK.textFromValueFunction = atkK.textFromValueFunction;
         for (auto* k : { &atkK, &decK, &holdK, &envDecK }) k->setTextValueSuffix ({});
+        initDrumSeq();
+        refresh();
         setSize (defaultW, defaultH);
         startTimerHz (30);
     }
-    ~BeatEditor() override { stopTimer(); }
+    ~BeatEditor() override
+    {
+        stopTimer();
+        if (auto* pp = header.getParentComponent()) pp->removeChildComponent (&header);   // oyna paneli bizdan keyin o'chadi
+    }
+    juce::Component* frameHeader() override { return &header; }
     bool allowWindowResizing() override { return false; }
     juce::ComponentBoundsConstrainer* getBoundsConstrainer() override { return nullptr; }
 
@@ -837,7 +1053,8 @@ public:
         muteB.setToggleState (v["mute"], juce::dontSendNotification); soloB.setToggleState (v["solo"], juce::dontSendNotification);
         chokeBox.setSelectedId ((int) v["choke"] + 1, juce::dontSendNotification);
         seqB.setToggleState (plugin.state["seqOn"], juce::dontSendNotification);
-        lenBox.setSelectedId (plugin.length(), juce::dontSendNotification);
+        lenBox.setSelectedId (juce::jlimit (1, 4, plugin.bars()), juce::dontSendNotification);
+        refreshDrumSeq();
         rateBox.setSelectedId ((int) plugin.state["rate"] + 1, juce::dontSendNotification);
         swingK.setValue ((double) plugin.state["swing"] * 100.0, juce::dontSendNotification);
         masterK.setValue ((double) plugin.state["master"], juce::dontSendNotification);
@@ -857,14 +1074,14 @@ public:
     }
 
     // ---------------------------------------------------------------- joylashuv
-    static constexpr float rowH = 17.0f;
+    static constexpr float rowH = 16.5f;
     juce::Rectangle<float> padRect (int i) const
     {
         const int row = 4 - i / 4, col = i % 4;              // Battery: 1-pad pastki chapda (MPC kabi), 20 pad = 4 x 5
         const float sz = 70, g = 7;
         return { 16 + col * (sz + g), 64 + row * (sz + g), sz, sz };
     }
-    juce::Rectangle<float> gridArea() const { return { 340, 88, (float) getWidth() - 356, beat::numPads * rowH }; }
+    juce::Rectangle<float> gridArea() const { return { 340, 100, (float) getWidth() - 356, beat::numPads * rowH }; }
     juce::Rectangle<float> laneArea() const { return gridArea().withTrimmedLeft (110); }
     juce::Rectangle<float> cell (int p, int s) const
     {
@@ -876,9 +1093,10 @@ public:
     static constexpr int defaultW = 1240, defaultH = 1136;
 private:
     juce::Rectangle<float> waveArea() const { return { 16, 478, 580, 158 }; }
-    juce::Rectangle<float> pePanel() const  { return { 16, 650, 388, 224 }; }
-    juce::Rectangle<float> fltPanel() const { return { 416, 650, 388, 224 }; }
-    juce::Rectangle<float> ampPanel() const { return { 816, 650, (float) getWidth() - 832, 224 }; }
+    juce::Rectangle<float> pePanel() const  { return { 16, 650, 290, 224 }; }
+    juce::Rectangle<float> fltPanel() const { return { 314, 650, 290, 224 }; }
+    juce::Rectangle<float> ampPanel() const { return { 612, 650, 312, 224 }; }
+    juce::Rectangle<float> dsPanel() const  { return { 932, 650, (float) getWidth() - 948, 224 }; }
     juce::Rectangle<float> mixPanel() const { return { 16, 884, (float) getWidth() - 32, 226 }; }
     // mikser: 0..19 — padlar, 20..23 — Bus 1-4, 24 — FX, 25 — Master
     static constexpr int numStrips = beat::numPads + 6;
@@ -933,7 +1151,10 @@ private:
         {
             auto ap = ampPanel().toNearestInt(); const int kw = (ap.getWidth() - 16) / 5;
             int ax = ap.getX() + 8;
-            for (auto* k : { &atkK, &holdK, &envDecK, &susK, &decK }) { k->setBounds (ax + (kw - 66) / 2, ap.getY() + 136, 66, 80); ax += kw; }
+            for (auto* k : { &atkK, &holdK, &envDecK, &susK, &decK }) { const int w = juce::jmin (62, kw); k->setBounds (ax + (kw - w) / 2, ap.getY() + 136, w, 80); ax += kw; }
+        }
+        layoutDrumSeq();
+        {
         }
         // Pitch envelope
         auto pe = pePanel().toNearestInt();
@@ -985,7 +1206,7 @@ private:
         const int L = plugin.length(); const int ps = plugin.playStep.load();
         auto ga = gridArea();
         const String dot = String::fromUTF8 ("  \xc2\xb7  ");
-        caps (g, "SEQUENCER" + dot + String (L) + " step" + dot + String (beat::rateNames[jlimit (0, 3, (int) plugin.state["rate"])]), { ga.getX(), 44, 400, 12 }, 8.5f);
+        caps (g, "SEQUENCER" + dot + String (beat::meters[jlimit (0, beat::numMeters - 1, (int) plugin.state.getProperty ("meter", 0))].name) + dot + String (L) + " step" + dot + String (beat::rateNames[jlimit (0, beat::numRates - 1, (int) plugin.state["rate"])]), { ga.getX(), 44, 500, 12 }, 8.5f);
         for (int p = 0; p < beat::numPads; ++p)
         {
             auto v = plugin.pad (p);
@@ -998,7 +1219,7 @@ private:
             for (int s = 0; s < L; ++s)
             {
                 auto c = cell (p, s).reduced (1.0f, 1.5f);
-                const bool beatStart = s % 4 == 0;
+                const bool beatStart = beat::stepLevel ((int) plugin.state.getProperty ("meter", 0), s) >= 2;
                 g.setColour (Colours::white.withAlpha (s == ps ? 0.13f : beatStart ? 0.06f : 0.035f)); g.fillRoundedRectangle (c, 2.5f);
                 if (const int vel = st[s]; vel > 0)
                 {
@@ -1009,6 +1230,23 @@ private:
             }
         }
         if (lane >= 0) paintLane (g);
+        // sanoq qatori (metr bo'yicha) va guruh chegaralari
+        {
+            const int met = (int) plugin.state.getProperty ("meter", 0);
+            for (int st = 0; st < L; ++st)
+            {
+                auto c0 = cell (0, st);
+                const int lv = beat::stepLevel (met, st);
+                const auto lab = beat::countLabel (met, st);
+                label (g, lab, { c0.getX(), ga.getY() - 13, c0.getWidth(), 12 }, lv >= 2 ? 9.0f : 7.5f,
+                       st == ps ? Colours::white : lv == 3 ? red : lv == 2 ? text : dim2, Justification::centred, lv >= 2 ? 800 : 500);
+                if (lv >= 2 && st > 0)
+                {
+                    g.setColour (lv == 3 ? Colours::white.withAlpha (0.35f) : Colours::white.withAlpha (0.14f));
+                    g.fillRect (c0.getX() - 0.5f, ga.getY() - 2, lv == 3 ? 1.5f : 1.0f, ga.getHeight() + 2);
+                }
+            }
+        }
         if (ps >= 0 && ps < L) { auto c = cell (0, ps); g.setColour (Colours::white.withAlpha (0.5f)); g.fillRect (c.getX(), ga.getY() - 4, c.getWidth(), 3.0f); }
         label (g, lane < 0 ? U ("Bosish: qo'yish/olish \xc2\xb7 vertikal sudrash yoki g'ildirak: velocity \xc2\xb7 Shift+bosish: ratchet \xc2\xb7 o'ng tugma: qatorni to'ldirish")
                            : U ("Lane: Pad ") + String (sel + 1) + U (" \xc2\xb7 chizib sudrang \xc2\xb7 g'ildirak: qiymat \xc2\xb1 \xc2\xb7 ikki marta bosish: standart qiymat \xc2\xb7 Alt+bosish: butun lane'ni tiklash"),
@@ -1056,7 +1294,7 @@ private:
         int x = 620; for (auto* n : kn) { caps (g, n, { (float) x, 458, 58, 10 }, 8, n[1] == 'E' && n[2] == 'L' ? Colour (0xff4ad6ff) : dim, Justification::centred); x += 64; }
         caps (g, "SWING", { (float) getWidth() - 82, 458, 64, 10 }, 8, dim, Justification::centred);
         g.setColour (Colours::white.withAlpha (0.06f)); g.drawVerticalLine (getWidth() - 92, 456, 560);
-        paintMixer (g); paintPitchEnv (g); paintFilter (g); paintAmpEnv (g);
+        paintMixer (g); paintPitchEnv (g); paintFilter (g); paintAmpEnv (g); paintDrumSeq (g);
         if (dropHint >= 0) { g.setColour (Colours::white.withAlpha (0.8f)); g.drawRoundedRectangle (padRect (dropHint), 10, 2.5f); }
         if (info.isNotEmpty()) label (g, info, { 16, (float) getHeight() - 24, (float) getWidth() - 32, 18 }, 10, silver, Justification::centredLeft, 500);
         label (g, U ("MIDI: C1 (36) = Pad 1 \xe2\x80\xa6 G2 (55) = Pad 20"), { 16, (float) getHeight() - 24, (float) getWidth() - 32, 18 }, 9, dim2, Justification::centredRight, 400);
@@ -1075,7 +1313,7 @@ private:
         for (int s = 0; s < L; ++s)
         {
             auto c = Rectangle<float> (la.getX() + s * w, la.getY(), w, la.getHeight()).reduced (1.5f, 3.0f);
-            g.setColour (Colours::white.withAlpha (s == ps ? 0.10f : s % 4 == 0 ? 0.05f : 0.025f)); g.fillRoundedRectangle (c, 2);
+            g.setColour (Colours::white.withAlpha (s == ps ? 0.10f : beat::stepLevel ((int) plugin.state.getProperty ("meter", 0), s) >= 2 ? 0.05f : 0.025f)); g.fillRoundedRectangle (c, 2);
             const int val = plugin.laneVal (sel, lane, s);
             const bool on = plugin.stepVel (sel, s) > 0;
             const float vy = c.getBottom() - c.getHeight() * val / 127.0f;
@@ -1455,7 +1693,13 @@ public:
         if (const int p = padAt (e.position); p >= 0)
         {
             sel = p; refresh();
-            if (e.mods.isPopupMenu()) padMenu (p); else plugin.previewPad (p, juce::jlimit (40, 127, (int) (127 - (e.position.y - padRect (p).getY()) * 0.6f)));
+            const int pv = juce::jlimit (40, 127, (int) (127 - (e.position.y - padRect (p).getY()) * 0.6f));
+            if (e.mods.isPopupMenu()) padMenu (p);
+            else
+            {
+                plugin.previewPad (p, pv);
+                if (plugin.recArm.load() && plugin.playStep.load() >= 0) { plugin.setStep (p, plugin.playStep.load(), pv, plugin.um()); marioBase = {}; }   // ● yozish (sichqoncha bilan)
+            }
             return;
         }
         if (lane >= 0 && laneArea().contains (e.position))
@@ -1790,7 +2034,8 @@ public:
     }
 
 private:
-    void timerCallback() override { if (++ticks % 8 == 0 || plugin.padPos[sel].load() >= 0.0f || ticks % 3 == 0 || plugin.playStep.load() != lastStep || juce::Time::getMillisecondCounter() - lastHitPaint < 300) { lastStep = plugin.playStep.load(); repaint(); }
+    void timerCallback() override { if (ticks % 4 == 0) updateSlotButtons();
+        if (++ticks % 8 == 0 || plugin.padPos[sel].load() >= 0.0f || ticks % 3 == 0 || plugin.playStep.load() != lastStep || juce::Time::getMillisecondCounter() - lastHitPaint < 300) { lastStep = plugin.playStep.load(); repaint(); }
                                     for (auto& h : plugin.padHit) if (juce::Time::getMillisecondCounter() - h.load() < 250) lastHitPaint = juce::Time::getMillisecondCounter(); }
     void chooseFile (const juce::String& title, const juce::String& pattern, bool save, std::function<void (juce::File)> cb)
     {
@@ -1810,6 +2055,267 @@ private:
     WSlider gainK, panK, tuneK, fineK, atkK, decK, dlyK, swingK, masterK;
     WSlider busF[beat::numBuses], fxF, peAmtK, peD1K, peBrkK, peD2K, fCutK, fResK, fGainK, holdK, envDecK, susK;
     WSlider padF[beat::numPads];
+    // ---------------------------------------------------------------- DRUM-SEQ (Transfuser) va oyna paneli
+    struct HeaderBar : public juce::Component
+    {
+        juce::ComboBox meterBox; juce::TextButton styleB, countB; juce::String styleName;
+        HeaderBar()
+        {
+            addAndMakeVisible (meterBox); addAndMakeVisible (styleB);
+            for (int i = 0; i < beat::numMeters; ++i) meterBox.addItem (juce::String (U ("Metr: ")) + beat::meters[i].name, i + 1);
+            meterBox.setTooltip (U ("O'lchov: 4/4, 3/4, 6/8, 5/4, 7/8, 9/8, 12/8, 7/4, triollar \xe2\x80\x94 kataklar va sanoq shunga moslashadi"));
+            styleB.setButtonText (U ("Ritm kutubxonasi \xe2\x96\xbe")); styleB.getProperties().set ("radius", 5.0f);
+            styleB.setTooltip (U ("Latino, Africano, Tresillo, Fors/Sharq, O'zbek, notoq metrlar va zamonaviy uslublar"));
+            styleB.setColour (juce::TextButton::buttonColourId, juce::Colour (0xffffc04a).withAlpha (0.18f));
+        }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (0, 1);
+            meterBox.setBounds (r.removeFromLeft (juce::jmin (170, r.getWidth() / 3))); r.removeFromLeft (6);
+            styleB.setBounds (r.removeFromLeft (juce::jmin (170, r.getWidth() / 2)));
+        }
+        void paint (juce::Graphics& g) override
+        {
+            if (styleName.isNotEmpty()) label (g, styleName, getLocalBounds().toFloat().withTrimmedLeft ((float) styleB.getRight() + 10), 11, juce::Colour (0xffffc04a), juce::Justification::centredLeft, 600);
+        }
+    } header;
+    juce::ComboBox dsPreset, dsNoteRange, dsSpeed, dsSync, dsGrooveType, marioTarget;
+    juce::TextButton dsPower, dsPlay, dsLatch, dsStop, dsRec, marioPrev, marioNext, marioApply, patCopy, patPaste, patClear;
+    juce::OwnedArray<juce::TextButton> slotB;
+    WSlider grooveK, simplifyK, marioDepth;
+    juce::ValueTree marioBase, patClipboard; int marioSeed = 0;
+    void showStyleMenu (juce::Component* target)
+    {
+        juce::PopupMenu m; std::map<juce::String, juce::PopupMenu> cats; juce::StringArray order;
+        for (int i = 0; i < beat::numStyles; ++i)
+        {
+            const juce::String c (U (beat::styles[i].cat));
+            if (! order.contains (c)) order.add (c);
+            cats[c].addItem (i + 1, juce::String (beat::styles[i].name) + "   (" + beat::meters[beat::styles[i].meter].name + juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (beat::styles[i].bpm) + " BPM)");
+        }
+        for (auto& c : order) m.addSubMenu (c, cats[c]);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (target), [this] (int r) { if (r > 0) applyStyleUI (r - 1); });
+    }
+public:
+    void applyStyleUI (int i)
+    {
+        plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT ritm");
+        plugin.applyStyle (i, plugin.um()); marioBase = {}; marioSeed = 0;
+        info = U ("Ritm: ") + beat::styles[i].name + U (" \xc2\xb7 tavsiya tempi ") + juce::String (beat::styles[i].bpm) + " BPM";
+        refresh();
+    }
+    // M.A.R.I.O.: asos patterndan variant yasash (DEPTH, TARGET); seed 0 = asl
+    void marioGenerate (int seed)
+    {
+        if (! marioBase.isValid()) marioBase = plugin.capturePattern();
+        plugin.applyPattern (marioBase, nullptr);
+        marioSeed = juce::jmax (0, seed);
+        if (marioSeed == 0) { plugin.rebuildForTest(); repaint(); return; }
+        juce::Random r (marioSeed * 7919 + 13);
+        const float d = (float) marioDepth.getValue() / 100.0f;
+        const int tgt = marioTarget.getSelectedId();   // 1 hammasi, 2 steplar, 3 velocity, 4 ratchet, 5 lane'lar, 6 tanlangan pad
+        const int L = plugin.length(), met = (int) plugin.state.getProperty ("meter", 0);
+        for (int p = 0; p < beat::numPads; ++p)
+        {
+            if (tgt == 6 && p != sel) continue;
+            auto st = AzBeatPlugin::intList (plugin.pad (p)["steps"], 0);
+            bool any = false; for (int k = 0; k < L; ++k) any |= st[k] > 0;
+            if (! any) continue;
+            const bool doSteps = tgt == 1 || tgt == 2 || tgt == 6, doVel = tgt == 1 || tgt == 3 || tgt == 6, doRat = tgt == 1 || tgt == 4 || tgt == 6, doLane = tgt == 5 || (tgt == 1 && d > 0.5f) || tgt == 6;
+            for (int k = 0; k < L; ++k)
+            {
+                const int lv = beat::stepLevel (met, k);
+                int v = st[k];
+                if (doSteps)
+                {
+                    if (v > 0 && lv < 3 && r.nextFloat() < d * 0.22f)
+                    {
+                        const int nb = (k + (r.nextBool() ? 1 : -1) + L) % L;
+                        if (st[nb] == 0 && lv < 2) { st.set (nb, v); st.set (k, 0); v = 0; }
+                        else if (lv == 0) { st.set (k, 0); v = 0; }
+                    }
+                    else if (v == 0 && lv <= 1 && r.nextFloat() < d * 0.14f) { v = 40 + r.nextInt (35); st.set (k, v); }   // sharpa zarb
+                }
+                if (doVel && v > 0) st.set (k, juce::jlimit (lv >= 2 ? 80 : 25, 127, v + juce::roundToInt ((r.nextFloat() * 2 - 1) * d * 40)));
+                if (doRat && st[k] > 0 && lv <= 1 && r.nextFloat() < d * 0.12f) plugin.setRatchet (p, k, 2 + r.nextInt (2));
+                if (doLane && st[k] > 0)
+                {
+                    if (r.nextFloat() < d * 0.3f) plugin.setLane (p, beat::lanePitch, k, juce::jlimit (0, 127, 64 + juce::roundToInt ((r.nextFloat() * 2 - 1) * d * 24)));
+                    if (r.nextFloat() < d * 0.3f) plugin.setLane (p, beat::lanePan, k, juce::jlimit (0, 127, 64 + juce::roundToInt ((r.nextFloat() * 2 - 1) * d * 50)));
+                    if (r.nextFloat() < d * 0.25f) plugin.setLane (p, beat::laneCut, k, juce::jlimit (30, 127, 127 - juce::roundToInt (r.nextFloat() * d * 80)));
+                }
+            }
+            plugin.pad (p).setProperty ("steps", AzBeatPlugin::listString (st), nullptr);
+        }
+        plugin.rebuildForTest();
+        info = "M.A.R.I.O. variant " + juce::String (marioSeed) + U (" \xc2\xb7 DEPTH ") + juce::String (juce::roundToInt (marioDepth.getValue())) + U ("% \xc2\xb7 APPLY = qabul qilish");
+        repaint();
+    }
+    void marioApplyCurrent() { if (marioSeed == 0 && ! marioBase.isValid()) marioGenerate (1); marioBase = {}; marioSeed = 0; info = U ("M.A.R.I.O.: variant qabul qilindi"); refresh(); }
+    void clickSlot (int i)
+    {
+        const int sync = (int) plugin.state.getProperty ("patSync", 2);
+        if (plugin.playStep.load() >= 0 && sync != 0) { plugin.pendingSlot = i; info = U ("Pattern ") + juce::String (i + 1) + (sync == 2 ? U (" \xe2\x80\x94 keyingi takt boshida") : U (" \xe2\x80\x94 keyingi zarbda")); }
+        else { plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT pattern"); plugin.selectSlot (i, plugin.um()); }
+        marioBase = {}; marioSeed = 0;
+        refresh();
+    }
+private:
+    void initDrumSeq()
+    {
+        header.meterBox.onChange = [this] { plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT metr"); plugin.setMeter (header.meterBox.getSelectedId() - 1, plugin.bars(), plugin.um()); marioBase = {}; refresh(); };
+        header.styleB.onClick = [this] { showStyleMenu (&header.styleB); };
+        addAndMakeVisible (dsPreset);
+        dsPreset.setTextWhenNothingSelected (U ("Ritm tanlang..."));
+        {
+            juce::String lastCat;
+            for (int i = 0; i < beat::numStyles; ++i)
+            {
+                if (lastCat != beat::styles[i].cat) { lastCat = beat::styles[i].cat; dsPreset.addSectionHeading (U (beat::styles[i].cat)); }
+                dsPreset.addItem (beat::styles[i].name, i + 1);
+            }
+        }
+        dsPreset.onChange = [this] { if (dsPreset.getSelectedId() > 0) applyStyleUI (dsPreset.getSelectedId() - 1); };
+        auto btn = [this] (juce::TextButton& b, const juce::String& t, const juce::String& tip, bool toggle)
+        {
+            addAndMakeVisible (b); b.setButtonText (t); b.setTooltip (tip); b.getProperties().set ("radius", 4.0f); b.setClickingTogglesState (toggle);
+        };
+        btn (dsPower, juce::String::fromUTF8 ("\xe2\x8f\xbb"), U ("Sekvenser yoqish / o'chirish"), true);
+        dsPower.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc04a));
+        dsPower.onClick = [this] { plugin.state.setProperty ("seqOn", dsPower.getToggleState(), plugin.um()); seqB.setToggleState (dsPower.getToggleState(), juce::dontSendNotification); };
+        btn (dsPlay, "#play", U ("Ijro"), false); btn (dsStop, "#stop", U ("To'xtatish"), false);
+        btn (dsLatch, "LATCH", U ("LATCH: trigger notasi qo'yib yuborilsa ham pattern davom etadi"), true);
+        btn (dsRec, "#rec", U ("Yozish: ijro paytida urilgan padlar patternga yoziladi"), true);
+        dsPlay.getProperties().set ("accent", (juce::int64) 0xff3ddc97); dsRec.getProperties().set ("accent", (juce::int64) 0xffff3347);
+        dsPlay.onClick = [this] { plugin.edit.getTransport().play (false); };
+        dsStop.onClick = [this] { plugin.edit.getTransport().stop (false, false); };
+        dsLatch.onClick = [this] { plugin.state.setProperty ("latch", dsLatch.getToggleState(), plugin.um()); };
+        dsRec.onClick = [this] { plugin.recArm = dsRec.getToggleState(); };
+        addAndMakeVisible (dsNoteRange); dsNoteRange.addItem (U ("Trigger pattern (C0\xe2\x80\x93B0)"), 2); dsNoteRange.addItem (U ("Trigger o'chiq"), 1);
+        dsNoteRange.setTooltip (U ("NOTE RANGE: MIDI klaviaturada C0..B0 notalari 1..12 patternlarni tanlaydi"));
+        dsNoteRange.onChange = [this] { plugin.state.setProperty ("trigMode", dsNoteRange.getSelectedId() == 2, plugin.um()); };
+        addAndMakeVisible (dsSpeed); dsSpeed.addItem ("1/2x", 1); dsSpeed.addItem ("1x", 2); dsSpeed.addItem ("2x", 3);
+        dsSpeed.setTooltip (U ("SPEED: pattern tezligi (yarim / oddiy / ikki barobar)"));
+        dsSpeed.onChange = [this] { plugin.state.setProperty ("speed", dsSpeed.getSelectedId() - 1, plugin.um()); };
+        addAndMakeVisible (dsSync); dsSync.addItem (U ("Darhol"), 1); dsSync.addItem (U ("Zarb"), 2); dsSync.addItem (U ("Takt"), 3);
+        dsSync.setTooltip (U ("SYNC: pattern almashinuvi qachon bo'ladi (darhol / keyingi zarb / keyingi takt)"));
+        dsSync.onChange = [this] { plugin.state.setProperty ("patSync", dsSync.getSelectedId() - 1, plugin.um()); };
+        addAndMakeVisible (dsGrooveType); for (int i = 0; i < beat::numGrooves; ++i) dsGrooveType.addItem (beat::grooves[i].name, i + 1);
+        dsGrooveType.setTooltip (U ("Groove shabloni (GROOVE knobi kuchini belgilaydi)"));
+        dsGrooveType.onChange = [this] { plugin.state.setProperty ("grooveType", dsGrooveType.getSelectedId() - 1, plugin.um()); };
+        auto knb = [this] (WSlider& k, double def)
+        {
+            addAndMakeVisible (k); k.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); k.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+            k.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
+            k.setRange (0, 100, 1); k.setDoubleClickReturnValue (true, def); k.setScrollWheelEnabled (true); k.setPopupDisplayEnabled (true, true, this); k.setTextValueSuffix ("%");
+            k.setColour (juce::Slider::rotarySliderFillColourId, juce::Colour (0xffffc04a));
+        };
+        knb (grooveK, 0); knb (simplifyK, 0); knb (marioDepth, 40);
+        grooveK.setTooltip (U ("GROOVE: tanlangan groove shabloni kuchi")); simplifyK.setTooltip (U ("SIMPLIFY: mayda zarblarni olib tashlab soddalashtirish (pattern o'zgarmaydi)"));
+        marioDepth.setTooltip (U ("M.A.R.I.O. DEPTH: variatsiya chuqurligi")); marioDepth.setValue (40, juce::dontSendNotification);
+        grooveK.onValueChange = [this] { plugin.state.setProperty ("groove", grooveK.getValue() / 100.0, plugin.um()); repaint (dsPanel().toNearestInt()); };
+        simplifyK.onValueChange = [this] { plugin.state.setProperty ("simplify", simplifyK.getValue() / 100.0, plugin.um()); repaint(); };
+        btn (marioPrev, juce::String::fromUTF8 ("\xe2\x97\x80"), U ("Oldingi variant"), false); btn (marioNext, juce::String::fromUTF8 ("\xe2\x96\xb6"), U ("Keyingi variant"), false);
+        btn (marioApply, "APPLY", U ("Variantni qabul qilish (yangi asos)"), false);
+        marioApply.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff4ad6ff).withAlpha (0.3f));
+        marioPrev.onClick = [this] { marioGenerate (marioSeed - 1); };
+        marioNext.onClick = [this] { marioGenerate (marioSeed + 1); };
+        marioApply.onClick = [this] { marioApplyCurrent(); };
+        addAndMakeVisible (marioTarget);
+        const char* tg[] = { "Hammasi", "Steplar", "Velocity", "Ratchet", "Lane'lar", "Tanlangan pad" };
+        for (int i = 0; i < 6; ++i) marioTarget.addItem (U (tg[i]), i + 1);
+        marioTarget.setSelectedId (1, juce::dontSendNotification); marioTarget.setTooltip (U ("TARGET: variatsiya nimaga ta'sir qiladi"));
+        for (int i = 0; i < AzBeatPlugin::numSlots; ++i)
+        {
+            auto* b = slotB.add (new juce::TextButton (juce::String (i + 1))); addAndMakeVisible (b);
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc04a));
+            b->getProperties().set ("radius", 3.0f); b->setTooltip (U ("Pattern ") + juce::String (i + 1) + U (" (MIDI: ") + juce::MidiMessage::getMidiNoteName (AzBeatPlugin::trigLo + i, true, true, 3) + ")");
+            b->onClick = [this, i] { clickSlot (i); };
+        }
+        btn (patCopy, "COPY", U ("Patternni nusxalash"), false); btn (patPaste, "PASTE", U ("Nusxani joriy slotga qo'yish"), false); btn (patClear, "CLEAR", U ("Joriy patternni tozalash"), false);
+        patCopy.onClick = [this] { patClipboard = plugin.capturePattern(); info = U ("Pattern nusxalandi"); repaint(); };
+        patPaste.onClick = [this] { if (patClipboard.isValid()) { plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT paste"); plugin.applyPattern (patClipboard, plugin.um()); marioBase = {}; refresh(); } };
+        patClear.onClick = [this]
+        {
+            plugin.edit.getUndoManager().beginNewTransaction ("AZ BEAT clear");
+            juce::ValueTree e ("PAT"); e.setProperty ("length", plugin.length(), nullptr); e.setProperty ("meter", plugin.state.getProperty ("meter", 0), nullptr); e.setProperty ("rate", plugin.state["rate"], nullptr);
+            plugin.applyPattern (e, plugin.um()); marioBase = {}; refresh();
+        };
+    }
+    void layoutDrumSeq()
+    {
+        auto dp = dsPanel().toNearestInt();
+        const int x = dp.getX(), y = dp.getY(), w = dp.getWidth();
+        dsPreset.setBounds (x + 74, y + 5, w - 108, 20); dsPower.setBounds (x + w - 28, y + 5, 22, 20);
+        int bx = x + 8;
+        for (auto* b : { &dsPlay, &dsLatch, &dsStop, &dsRec }) { const int bw = b == &dsLatch ? 42 : 26; b->setBounds (bx, y + 32, bw, 20); bx += bw + 3; }
+        dsNoteRange.setBounds (x + 8, y + 58, 134, 18);
+        grooveK.setBounds (x + w - 126, y + 40, 50, 40); simplifyK.setBounds (x + w - 64, y + 40, 50, 40);
+        dsSpeed.setBounds (x + 8, y + 94, 62, 18); dsSync.setBounds (x + 74, y + 94, 70, 18); dsGrooveType.setBounds (x + 148, y + 94, w - 156, 18);
+        // M.A.R.I.O.
+        marioDepth.setBounds (x + 38, y + 132, 50, 44);
+        marioPrev.setBounds (x + 10, y + 144, 22, 18); marioNext.setBounds (x + 94, y + 144, 22, 18);
+        marioApply.setBounds (x + 22, y + 180, 82, 18); marioTarget.setBounds (x + 10, y + 201, 106, 18);
+        // PATTERN
+        const int px = x + 132, pw = w - 140, sw = (pw - 5 * 2) / 6;
+        for (int i = 0; i < AzBeatPlugin::numSlots; ++i) slotB[i]->setBounds (px + (i % 6) * (sw + 2), y + 134 + (i / 6) * 24, sw, 21);
+        const int cw = (pw - 6) / 3;
+        patCopy.setBounds (px, y + 186, cw, 18); patPaste.setBounds (px + cw + 3, y + 186, cw, 18); patClear.setBounds (px + 2 * (cw + 3), y + 186, cw, 18);
+    }
+    void refreshDrumSeq()
+    {
+        auto& st = plugin.state;
+        header.meterBox.setSelectedId ((int) st.getProperty ("meter", 0) + 1, juce::dontSendNotification);
+        header.styleName = st.getProperty ("styleName", "").toString(); header.repaint();
+        {
+            int sid = 0; for (int i = 0; i < beat::numStyles; ++i) if (header.styleName.endsWith (juce::String (" / ") + beat::styles[i].name)) sid = i + 1;
+            dsPreset.setSelectedId (sid, juce::dontSendNotification);
+        }
+        dsPower.setToggleState ((bool) st["seqOn"], juce::dontSendNotification);
+        dsLatch.setToggleState ((bool) st.getProperty ("latch", true), juce::dontSendNotification);
+        dsRec.setToggleState (plugin.recArm.load(), juce::dontSendNotification);
+        dsNoteRange.setSelectedId ((bool) st.getProperty ("trigMode", false) ? 2 : 1, juce::dontSendNotification);
+        dsSpeed.setSelectedId ((int) st.getProperty ("speed", 1) + 1, juce::dontSendNotification);
+        dsSync.setSelectedId ((int) st.getProperty ("patSync", 2) + 1, juce::dontSendNotification);
+        dsGrooveType.setSelectedId ((int) st.getProperty ("grooveType", 0) + 1, juce::dontSendNotification);
+        grooveK.setValue ((double) st.getProperty ("groove", 0.0) * 100.0, juce::dontSendNotification);
+        simplifyK.setValue ((double) st.getProperty ("simplify", 0.0) * 100.0, juce::dontSendNotification);
+        updateSlotButtons();
+    }
+    void updateSlotButtons()
+    {
+        if (slotB.size() < AzBeatPlugin::numSlots) return;
+        const int cur = plugin.currentSlot(), pend = plugin.pendingSlot.load();
+        const bool blink = (juce::Time::getMillisecondCounter() / 250) % 2 == 0;
+        for (int i = 0; i < AzBeatPlugin::numSlots; ++i)
+        {
+            auto* b = slotB[i];
+            const bool has = plugin.slotHasNotes (i);
+            // joriy slot — sariq (yoqilgan), kutilayotgani miltillaydi; ichida nota bor slot — "•" belgisi
+            b->setToggleState (i == cur || (i == pend && blink), juce::dontSendNotification);
+            const auto t = juce::String (i + 1) + (has ? juce::String::fromUTF8 ("\xe2\x80\xa2") : juce::String());
+            if (b->getButtonText() != t) b->setButtonText (t);
+        }
+    }
+    void paintDrumSeq (juce::Graphics& g)
+    {
+        using namespace juce;
+        auto dp = dsPanel(); panelBg (g, dp, "");
+        label (g, "DRUM-SEQ", { dp.getX() + 10, dp.getY() + 5, 64, 20 }, 11, Colour (0xffffc04a), Justification::centredLeft, 800);
+        caps (g, "GROOVE " + String (roundToInt (grooveK.getValue())) + "%", { dp.getRight() - 136, dp.getY() + 28, 70, 10 }, 7.5f, dim, Justification::centred);
+        caps (g, "SIMPLIFY " + String (roundToInt (simplifyK.getValue())) + "%", { dp.getRight() - 74, dp.getY() + 28, 70, 10 }, 7.5f, dim, Justification::centred);
+
+        caps (g, "SPEED", { dp.getX() + 8, dp.getY() + 83, 62, 10 }, 7.5f, dim);
+        caps (g, "SYNC", { dp.getX() + 74, dp.getY() + 83, 62, 10 }, 7.5f, dim);
+        caps (g, "GROOVE SHABLON", { dp.getX() + 148, dp.getY() + 83, 120, 10 }, 7.5f, dim);
+        auto mb = Rectangle<float> (dp.getX() + 6, dp.getY() + 116, 116, 104), pb = Rectangle<float> (dp.getX() + 128, dp.getY() + 116, dp.getWidth() - 134, 104);
+        for (auto r : { mb, pb }) { g.setColour (Colours::white.withAlpha (0.03f)); g.fillRoundedRectangle (r, 6); g.setColour (Colours::white.withAlpha (0.08f)); g.drawRoundedRectangle (r, 6, 1); }
+        caps (g, "M.A.R.I.O.", { mb.getX() + 6, mb.getY() + 3, 80, 10 }, 7.5f, Colour (0xff4ad6ff));
+        label (g, marioSeed == 0 ? String ("asl") : "#" + String (marioSeed), { mb.getRight() - 40, mb.getY() + 2, 34, 11 }, 8, silver, Justification::centredRight, 700);
+        caps (g, "DEPTH " + String (roundToInt (marioDepth.getValue())) + "%", { mb.getX(), mb.getY() + 60, mb.getWidth(), 10 }, 7.5f, dim, Justification::centred);
+        caps (g, "PATTERN", { pb.getX() + 6, pb.getY() + 3, 80, 10 }, 7.5f, Colour (0xffffc04a));
+        label (g, "Slot " + String (plugin.currentSlot() + 1), { pb.getRight() - 60, pb.getY() + 2, 54, 11 }, 8, silver, Justification::centredRight, 700);
+    }
     juce::TextEditor nameEd; int renameKind = 0, renameIdx = 0;
     int envTab = 0, hoverNode = -1, dragNode = -1;
     juce::OwnedArray<juce::TextButton> laneTabs, fTypeB, fSlopeB; juce::ComboBox busBox;

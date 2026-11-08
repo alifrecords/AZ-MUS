@@ -1353,6 +1353,89 @@ inline int runSelfTest (const juce::StringArray& args)
         mcd.reset();
     }
 
+    // ================= 0.16: metrlar, ritm kutubxonasi, DRUM-SEQ (Transfuser): groove, simplify, speed, patternlar, M.A.R.I.O.
+    {
+        auto ab = std::make_unique<az::AppEngine>(); ab->newProject (dir.getChildFile ("t16.azmus"));
+        auto& e = *ab->edit; e.tempoSequence.getTempo (0)->setBpm (120.0);
+        for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        auto* bt = az::addBeatTrack (*ab); auto* bp = az::beatPluginOf (*bt);
+        bt->insertMIDIClip (te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (2.2)), nullptr);
+        // metrlar va sanoq
+        bp->setMeter (2, 1, nullptr);
+        check (bp->length() == 12 && az::beat::countLabel (2, 0) == "1" && az::beat::countLabel (2, 1) == "&" && az::beat::countLabel (2, 6) == "4"
+               && az::beat::stepLevel (2, 6) == 2 && az::beat::stepLevel (2, 2) == 1, "Metr 6/8: 12 katak, sanoq 1 & 2 & ... 4, guruh 3+3");
+        bp->setMeter (3, 2, nullptr);
+        check (bp->length() == 40 && az::beat::countLabel (3, 16) == "5", "Metr 5/4: 20 katak x 2 takt, sanoq 1..5");
+        bp->setMeter (4, 1, nullptr);
+        check (bp->length() == 14 && az::beat::stepLevel (4, 8) == 2 && az::beat::countLabel (4, 12) == "7", "Metr 7/8 (2+2+3): 14 katak, guruhlar 4+4+6");
+        bp->setMeter (8, 1, nullptr);
+        check (bp->length() == 12 && (int) bp->state["rate"] == 4 && az::beat::countLabel (8, 3) == "2", "Triol 1/8T: 12 katak, sanoq 1 ta ta 2 ...");
+        // ritm kutubxonasi
+        int clave = -1; for (int i = 0; i < az::beat::numStyles; ++i) if (juce::String (az::beat::styles[i].name) == "Son clave 3-2") clave = i;
+        bp->applyStyle (clave, nullptr);
+        juce::String rim; for (int k = 0; k < 16; ++k) rim << (bp->stepVel (5, k) > 0 ? "x" : "-");
+        int persian = -1; for (int i = 0; i < az::beat::numStyles; ++i) if (juce::String (az::beat::styles[i].name).startsWith ("Fors 6/8")) persian = i;
+        std::printf ("       Son clave 3-2: %s  (%d ta uslub)\n", rim.toRawUTF8(), az::beat::numStyles);
+        check (clave >= 0 && rim == "x--x--x---x-x---" && bp->length() == 16, "Ritm kutubxonasi: Son clave 3-2 (Latino)");
+        bp->applyStyle (persian, nullptr);
+        check (persian >= 0 && bp->length() == 12 && (int) bp->state["meter"] == 2, "Ritm kutubxonasi: Fors 6/8 metri bilan");
+        // render yordamchi: hat qatoridagi zarba boshlari
+        for (int p = 0; p < az::beat::numPads; ++p) { bp->pad (p).setProperty ("steps", juce::String::repeatedString ("0,", az::beat::maxSteps), nullptr); bp->pad (p).setProperty ("decay", 0.0, nullptr); }
+        bp->setMeter (0, 1, nullptr);
+        for (int k = 0; k < 16; ++k) bp->setStep (5, k, k % 4 == 0 ? 120 : 90);
+        bp->rebuildForTest();
+        int nr = 0;
+        auto onsets = [&] (std::vector<double>& out)
+        {
+            const auto f = dir.getChildFile ("t16_" + juce::String (++nr) + ".wav"); ab->exportWav (f, 32);
+            juce::AudioBuffer<float> b; double sr = 0; az::dop::readFile (ab->engine, f, b, sr);
+            out.clear(); double last = -1; const float thr = 0.3f * b.getMagnitude (0, 0, juce::jmin (b.getNumSamples(), (int) (2.0 * sr)));
+            for (int i = 1; i < (int) (2.0 * sr); ++i) if (std::abs (b.getSample (0, i)) > thr && (last < 0 || i - last > sr * 0.04)) { out.push_back (i / sr); last = i; }
+        };
+        std::vector<double> o0, o1; onsets (o0);
+        bp->state.setProperty ("simplify", 0.7, nullptr); bp->rebuildForTest(); onsets (o1);
+        std::printf ("       SIMPLIFY 70%%: zarbalar %d -> %d\n", (int) o0.size(), (int) o1.size());
+        check (o0.size() >= 15 && o0.size() <= 17 && o1.size() <= o0.size() / 2 + 1 && o1.size() >= 3, "SIMPLIFY: mayda zarblar olib tashlanadi, asosiylari qoladi");
+        bp->state.setProperty ("simplify", 0.0, nullptr);
+        bp->state.setProperty ("grooveType", 0, nullptr); bp->state.setProperty ("groove", 1.0, nullptr); bp->rebuildForTest(); onsets (o1);
+        const double step = 0.125;
+        const double sh = o1.size() > 2 && o0.size() > 2 ? (o1[1] - o0[1]) / step : 0;
+        std::printf ("       GROOVE 1/16 SW 100%%: 2-zarba siljishi %.2f step\n", sh);
+        check (std::abs (sh - 0.33) < 0.05 && std::abs (o1[0] - o0[0]) < 0.002, "GROOVE: 1/16 swing shabloni (offbeat 1/3 step kechikadi)");
+        bp->state.setProperty ("groove", 0.0, nullptr);
+        bp->state.setProperty ("speed", 2, nullptr); bp->rebuildForTest(); onsets (o1);
+        const double gap = o1.size() > 3 ? o1[2] - o1[1] : 0;
+        std::printf ("       SPEED 2x: zarblar oralig'i %.4f s (1x: %.4f)\n", gap, o0.size() > 3 ? o0[2] - o0[1] : 0);
+        check (std::abs (gap - step / 2) < 0.003, "SPEED 2x: pattern ikki barobar tez");
+        bp->state.setProperty ("speed", 1, nullptr);
+        // pattern slotlari
+        bp->selectSlot (1);
+        const bool emptyNew = bp->stepVel (5, 0) == 0 && bp->currentSlot() == 1;
+        bp->setStep (0, 0, 110);
+        bp->selectSlot (0);
+        const bool back = bp->stepVel (5, 4) == 120 && bp->stepVel (0, 0) == 0;
+        bp->selectSlot (1);
+        const bool kept = bp->stepVel (0, 0) == 110;
+        bp->selectSlot (0);
+        check (emptyNew && back && kept && bp->slotHasNotes (0) && bp->slotHasNotes (1) && ! bp->slotHasNotes (5), "PATTERN: 12 slot (almashish, saqlanishi, bo'sh slot)");
+        // trigger: C0..B0 notalari
+        check (az::AzBeatPlugin::trigLo == 24 && az::AzBeatPlugin::numSlots == 12, "NOTE RANGE: C0..B0 -> 12 pattern");
+        // M.A.R.I.O.
+        {
+            az::BeatEditor ed (*bp);
+            const auto before = bp->capturePattern();
+            ed.marioGenerate (3);
+            const auto var = bp->capturePattern();
+            bool changed = false; for (int p = 0; p < az::beat::numPads; ++p) changed |= var["s" + juce::String (p)] != before["s" + juce::String (p)];
+            ed.marioGenerate (0);
+            const auto restored = bp->capturePattern();
+            bool same = true; for (int p = 0; p < az::beat::numPads; ++p) same &= restored["s" + juce::String (p)] == before["s" + juce::String (p)];
+            check (changed && same, "M.A.R.I.O.: variant yasaladi, 0-variant asl patternga qaytaradi");
+            ed.applyStyleUI (clave);
+            check (bp->stepVel (5, 3) > 0, "DRUM-SEQ: ritm menyusidan uslub qo'yiladi");
+        }
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

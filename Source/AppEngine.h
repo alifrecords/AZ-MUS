@@ -38,6 +38,9 @@ inline std::function<bool()> pluginWindowIsPlaying;
 inline bool pluginWindowPinDefault = true;
 
 // plagin oynasi tepasidagi panel: ▶ ■ |◀  ·  nom  ·  ✓ Qotirish
+// plagin muharriri oyna tepasidagi panelga o'z boshqaruvlarini qo'yishi uchun (masalan AZ BEAT: metr va ritm kutubxonasi)
+struct FrameHeaderProvider { virtual ~FrameHeaderProvider() = default; virtual juce::Component* frameHeader() = 0; };
+
 class PluginFrame : public juce::Component, private juce::Timer
 {
 public:
@@ -45,6 +48,7 @@ public:
     PluginFrame (juce::Component& c, juce::DocumentWindow& w, te::Plugin* zoomPlugin = nullptr) : content (c), window (w), zp (zoomPlugin)
     {
         addAndMakeVisible (content);
+        if (auto* hp = dynamic_cast<FrameHeaderProvider*> (&content)) if ((header = hp->frameHeader()) != nullptr) addAndMakeVisible (header);
         if (zp != nullptr)
         {   // Zoom: oynani kichraytirish / kattalashtirish (−  100%  +, Ctrl+g'ildirak, Ctrl + / − / 0, burchakdan sudrash)
             for (auto* b : { &zOutB, &zPctB, &zInB })
@@ -166,6 +170,7 @@ public:
             zInB.setBounds (r.removeFromRight (26)); r.removeFromRight (2);
             zPctB.setBounds (r.removeFromRight (54)); r.removeFromRight (2);
             zOutB.setBounds (r.removeFromRight (26));
+            if (header != nullptr) { r.removeFromRight (10); r.removeFromLeft (12); header->setBounds (r); }
             // oyna burchagidan sudralsa: zoom oyna o'lchamiga moslashadi
             if (! resizing && (getWidth() != frameW() || getHeight() != frameH()) && baseW > 0)
             {
@@ -190,7 +195,7 @@ public:
     juce::TextButton playB, stopB, startB, pinB, zOutB, zPctB, zInB;
 private:
     juce::Component& content; juce::DocumentWindow& window; bool resizing = false, wasPlaying = false;
-    te::Plugin* zp = nullptr; float zoom = 1.0f; int baseW = 0, baseH = 0;
+    te::Plugin* zp = nullptr; float zoom = 1.0f; int baseW = 0, baseH = 0; juce::Component* header = nullptr;
 };
 
 class PluginWindow : public juce::DocumentWindow
