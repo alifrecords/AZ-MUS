@@ -246,6 +246,8 @@ public:
             g.setColour (c); g.fillRect (x1 + 1, 4.0f, 3.0f, 18.0f);
             label (g, m->getName().toUpperCase(), { x1 + 9, 4, x2 - x1 - 12, 18 }, 10, text, Justification::centredLeft, 600);
         }
+        // Cubase tuzilishi: [0..22] markerlar · [22..37] lokatorlar / sikl · [37..56] takt raqamlari = kursor zonasi
+        g.setColour (bg1.withAlpha (0.55f)); g.fillRect (0.0f, (float) cycleTop, W, (float) (cycleBot - cycleTop));
         // taktlar
         const double beatPx = vs.pxPerSec * 60.0 / ts.getTempo (0)->getBpm();
         const int barStep = beatPx * 4 > 70 ? 1 : beatPx * 4 > 30 ? 2 : beatPx * 4 > 14 ? 4 : 8;
@@ -256,51 +258,172 @@ public:
             if (x > W) break;
             const bool major = bar % barStep == 0;
             g.setColour (Colours::white.withAlpha (major ? 0.22f : 0.1f));
-            g.fillRect (x, major ? 32.0f : 42.0f, 1.0f, major ? H - 32 : H - 42);
+            g.fillRect (x, major ? (float) cycleBot : 46.0f, 1.0f, major ? H - cycleBot : H - 46);
             if (major) label (g, vs.timeFormat == ViewState::fmtBars ? String (bar + 1)
                                  : formatTime (e, ts.toTime (te::tempo::BarsAndBeats { bar, {} }), vs, app.engine.getDeviceManager().getSampleRate() > 0 ? app.engine.getDeviceManager().getSampleRate() : 48000.0),
-                              { x + 4, 30, vs.timeFormat == ViewState::fmtBars ? 40.0f : 90.0f, 14 }, 10, dim, Justification::centredLeft, 400);
+                              { x + 4, (float) cycleBot + 1, vs.timeFormat == ViewState::fmtBars ? 40.0f : 90.0f, 13 }, 10, dim, Justification::centredLeft, 400);
             if (beatPx > 22)
                 for (int b = 1; b < 4; ++b)
                 {
                     const float bx = vs.secToX (ts.toTime (te::tempo::BarsAndBeats { bar, te::BeatDuration::fromBeats (b) }).inSeconds());
-                    g.setColour (Colours::white.withAlpha (0.07f)); g.fillRect (bx, 48.0f, 1.0f, H - 48);
+                    g.setColour (Colours::white.withAlpha (0.07f)); g.fillRect (bx, 50.0f, 1.0f, H - 50);
                 }
         }
-        // loop
+        // lokatorlar va sikl (Cubase: L / R, faol bo'lsa rangli, aks holda kulrang)
         auto& tr = e.getTransport();
         const auto lr = tr.getLoopRange();
         if (lr.getLength() > 0s)
         {
             const float x1 = vs.secToX (lr.getStart().inSeconds()), x2 = vs.secToX (lr.getEnd().inSeconds());
-            g.setColour (red.withAlpha (tr.looping ? 0.22f : 0.08f)); g.fillRect (x1, H - 9, x2 - x1, 8.0f);
-            g.setColour (tr.looping ? red : dim2); g.fillRect (x1, H - 9, 2.0f, 8.0f); g.fillRect (x2 - 2, H - 9, 2.0f, 8.0f);
+            const auto c = tr.looping ? red : Colour (0xff6e6b66);
+            const bool hot = hover == hBody || drag == dMove;
+            g.setColour (c.withAlpha (tr.looping ? (hot ? 0.55f : 0.42f) : (hot ? 0.3f : 0.2f)));
+            g.fillRoundedRectangle (x1, cycleTop + 3.0f, jmax (2.0f, x2 - x1), (float) (cycleBot - cycleTop - 6), 2.0f);
+            auto flag = [&] (float x, bool left, bool h)
+            {   // lokator bayroqchasi (uchburchak) — sudrab o'zgartiriladi
+                Path p;
+                if (left) p.addTriangle (x, (float) cycleTop + 1, x + 9, (float) cycleTop + 1, x, (float) cycleBot - 1);
+                else      p.addTriangle (x, (float) cycleTop + 1, x - 9, (float) cycleTop + 1, x, (float) cycleBot - 1);
+                g.setColour (h ? Colours::white : c.brighter (0.25f)); g.fillPath (p);
+                g.fillRect (left ? x : x - 1.5f, (float) cycleTop + 1, 1.5f, H - cycleTop - 1);
+            };
+            flag (x1, true,  hover == hLeft  || drag == dLeft);
+            flag (x2, false, hover == hRight || drag == dRight);
+            // uzunlik yozuvi (taktlarda) — sudrash paytida ham ko'rinadi
+            const auto b1 = ts.toBarsAndBeats (lr.getStart()), b2 = ts.toBarsAndBeats (lr.getEnd());
+            const double bars = (ts.toBeats (lr.getEnd()) - ts.toBeats (lr.getStart())).inBeats() / jmax (1, b1.numerator ? b1.numerator : 4);
+            if (x2 - x1 > 70)
+                label (g, String (b1.bars + 1) + U (" \xe2\x86\x92 ") + String (b2.bars + 1) + "  \xc2\xb7  " + String (bars, bars == std::floor (bars) ? 0 : 2) + U (" takt"),
+                       { x1 + 12, (float) cycleTop + 1, x2 - x1 - 24, (float) (cycleBot - cycleTop - 2) }, 9.5f,
+                       tr.looping ? Colours::white : silver, Justification::centred, 600);
+        }
+        else if (hover != hNone)
+            label (g, U ("Sikl: sudrab chizing (taktga yopishadi, Alt = setka, Shift = erkin)  \xc2\xb7  Ctrl+klik = L, Alt+klik = R"), { 8, (float) cycleTop, 620, (float) (cycleBot - cycleTop) }, 9.5f, dim2, Justification::centredLeft, 500);
+        if (drawFrom.has_value())
+        {   // chizilayotgan yangi oraliq
+            const float x1 = vs.secToX (drawFrom->getStart().inSeconds()), x2 = vs.secToX (drawFrom->getEnd().inSeconds());
+            g.setColour (red.withAlpha (0.5f)); g.drawRoundedRectangle (x1, cycleTop + 3.0f, x2 - x1, (float) (cycleBot - cycleTop - 6), 2.0f, 1.2f);
         }
         // kursor
         const float px = vs.secToX (tr.getPosition().inSeconds());
-        Path p; p.addTriangle (px - 6, H - 9, px + 6, H - 9, px, H - 1);
-        g.setColour (Colours::white); g.fillPath (p);
+        Path p; p.addTriangle (px - 6, (float) cycleBot, px + 6, (float) cycleBot, px, (float) cycleBot + 9);
+        g.setColour (drag == dCursor ? red : Colours::white); g.fillPath (p);
+        g.fillRect (px - 0.5f, (float) cycleBot + 8, 1.0f, H - cycleBot - 8);
         g.setColour (line); g.drawHorizontalLine (getHeight() - 1, 0, W);
     }
 
+    // ---- sichqoncha (Cubase): yuqori zona = lokatorlar, pastki zona = kursor
+    enum Hover { hNone, hLeft, hRight, hBody, hEmpty };
+    enum Drag  { dNone, dLeft, dRight, dMove, dDraw, dCursor };
+    static constexpr int cycleTop = 22, cycleBot = 37;
+    Hover hitTestCycle (juce::Point<float> p) const
+    {
+        if (! app.edit || p.y < cycleTop || p.y >= cycleBot) return hNone;
+        const auto lr = app.edit->getTransport().getLoopRange();
+        if (lr.getLength() > 0s)
+        {
+            const float x1 = vs.secToX (lr.getStart().inSeconds()), x2 = vs.secToX (lr.getEnd().inSeconds());
+            if (std::abs (p.x - x1) <= 7 && p.x <= x1 + jmin (7.0f, (x2 - x1) * 0.3f)) return hLeft;
+            if (std::abs (p.x - x2) <= 7 && p.x >= x2 - jmin (7.0f, (x2 - x1) * 0.3f)) return hRight;
+            if (p.x > x1 && p.x < x2) return hBody;
+        }
+        return hEmpty;
+    }
+    // lokatorlar: standart — eng yaqin TAKT chizig'iga; Alt — joriy setkaga (1/8 ...); Shift — erkin
+    te::TimePosition snapAt (const juce::MouseEvent& e) const { return snapLoc (vs.xToSec (e.position.x), e.mods); }
+    te::TimePosition snapLoc (double sec, juce::ModifierKeys m) const
+    {
+        sec = juce::jmax (0.0, sec);
+        if (m.isShiftDown()) return te::TimePosition::fromSeconds (sec);
+        if (m.isAltDown() && drag != dNone) return snapTime (*app.edit, sec, vs, true);
+        auto& ts = app.edit->tempoSequence;
+        const auto bb = ts.toBarsAndBeats (te::TimePosition::fromSeconds (sec));
+        const auto a = ts.toTime (te::tempo::BarsAndBeats { bb.bars, {} }), b = ts.toTime (te::tempo::BarsAndBeats { bb.bars + 1, {} });
+        return sec - a.inSeconds() < b.inSeconds() - sec ? a : b;
+    }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        const auto h = hitTestCycle (e.position);
+        if (h != hover) { hover = h; repaint(); }
+        setMouseCursor (h == hLeft || h == hRight ? juce::MouseCursor::LeftRightResizeCursor
+                      : h == hBody ? juce::MouseCursor::DraggingHandCursor
+                      : e.y >= cycleBot ? juce::MouseCursor::IBeamCursor : juce::MouseCursor::NormalCursor);
+    }
+    void mouseExit (const juce::MouseEvent&) override { if (hover != hNone) { hover = hNone; repaint(); } }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (! app.edit) return;
-        dragStart = snapTime (*app.edit, vs.xToSec (e.position.x), vs);
-        if (! e.mods.isShiftDown() && e.y < getHeight() - 12) app.edit->getTransport().setPosition (dragStart);
+        auto& tr = app.edit->getTransport();
+        moved = false; drag = dNone; drawFrom.reset();
+        dragStart = snapAt (e);
+        if (e.y < cycleTop) return;                          // markerlar qatori: ikki marta bosish = marker
+        if (e.y >= cycleBot)
+        {   // kursor zonasi: bosish = joylash (setka snap), sudrash = scrub; Shift = erkin
+            drag = dCursor;
+            dragStart = e.mods.isShiftDown() ? te::TimePosition::fromSeconds (juce::jmax (0.0, vs.xToSec (e.position.x))) : snapTime (*app.edit, vs.xToSec (e.position.x), vs);
+            tr.setPosition (dragStart); repaint(); return;
+        }
+        // Cubase: Ctrl+klik = chap lokator, Alt+klik = o'ng lokator
+        auto lr = tr.getLoopRange();
+        if (e.mods.isCommandDown() || e.mods.isAltDown())
+        {
+            auto a = lr.getStart(), b = lr.getEnd();
+            if (lr.getLength() <= 0s) { a = dragStart; b = dragStart + 4s; }
+            if (e.mods.isCommandDown()) a = dragStart; else b = dragStart;
+            if (b > a) tr.setLoopRange ({ a, b });
+            if (onLocatorsChanged) onLocatorsChanged();
+            repaint(); return;
+        }
+        const auto h = hitTestCycle (e.position);
+        drag = h == hLeft ? dLeft : h == hRight ? dRight : h == hBody ? dMove : dDraw;
+        orig = lr;
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (! app.edit) return;
-        // sudrash = loop zonasi
-        auto t2 = snapTime (*app.edit, vs.xToSec (e.position.x), vs);
-        auto a = juce::jmin (dragStart, t2), b = juce::jmax (dragStart, t2);
-        if (b - a > 0.05s) { app.edit->getTransport().setLoopRange ({ a, b }); app.edit->getTransport().looping = true; }
+        if (! app.edit || drag == dNone) return;
+        auto& tr = app.edit->getTransport();
+        if (e.getDistanceFromDragStart() > 2) moved = true;
+        if (! moved) return;
+        const auto t = snapAt (e);
+        const auto minLen = te::TimeDuration::fromSeconds (e.mods.isShiftDown() || e.mods.isAltDown() ? juce::jmax (0.05, 8.0 / vs.pxPerSec)
+                                                          : 240.0 / app.edit->tempoSequence.getTempo (0)->getBpm() * 0.5);   // takt rejimi: kamida ~1 takt
+        switch (drag)
+        {
+            case dCursor: tr.setPosition (e.mods.isShiftDown() ? te::TimePosition::fromSeconds (juce::jmax (0.0, vs.xToSec (e.position.x))) : snapTime (*app.edit, vs.xToSec (e.position.x), vs)); break;
+            case dLeft:   tr.setLoopRange ({ juce::jmin (t, orig.getEnd() - minLen), orig.getEnd() }); break;
+            case dRight:  tr.setLoopRange ({ orig.getStart(), juce::jmax (t, orig.getStart() + minLen) }); break;
+            case dMove:
+            {   // butun oraliqni siljitish (uzunlik saqlanadi, boshi snap qilinadi)
+                const auto delta = te::TimeDuration::fromSeconds (vs.xToSec (e.position.x) - vs.xToSec ((float) e.getMouseDownX()));
+                auto s0 = te::TimePosition::fromSeconds (juce::jmax (0.0, (orig.getStart() + delta).inSeconds()));
+                s0 = snapLoc (s0.inSeconds(), e.mods);
+                tr.setLoopRange ({ s0, s0 + orig.getLength() });
+                break;
+            }
+            case dDraw:
+            {
+                auto a = juce::jmin (dragStart, t), b = juce::jmax (dragStart, t);
+                if (b - a >= minLen) { tr.setLoopRange ({ a, b }); tr.looping = true; }
+                break;
+            }
+            default: break;
+        }
+        if (onLocatorsChanged) onLocatorsChanged();
         repaint();
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (! app.edit) return;
+        auto& tr = app.edit->getTransport();
+        if (! moved && drag == dMove) tr.looping = ! tr.looping;   // Cubase: sikl oralig'iga bosish = yoqish / o'chirish
+        drag = dNone; drawFrom.reset();
+        if (onLocatorsChanged) onLocatorsChanged();
+        mouseMove (e); repaint();
     }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (! app.edit) return;
+        if (e.y >= cycleTop) return;                           // marker faqat yuqori qatorda
         // ikki marta bosish = marker (qo'shiq bo'limi) qo'shish
         auto& ts = app.edit->tempoSequence;
         auto t = snapTime (*app.edit, vs.xToSec (e.position.x), vs, true);
@@ -315,9 +438,11 @@ public:
         }
         repaint();
     }
+    std::function<void()> onLocatorsChanged;
 
 private:
     AppEngine& app; ViewState& vs; te::TimePosition dragStart;
+    Hover hover = hNone; Drag drag = dNone; bool moved = false; te::TimeRange orig; std::optional<te::TimeRange> drawFrom;
 };
 
 // klip ko'rinadigan qismining to'lqin fayli ichidagi vaqt oralig'i.
@@ -422,10 +547,12 @@ public:
         }
         // loop zonasi
         auto& tr = e.getTransport();
-        if (tr.looping && tr.getLoopRange().getLength() > 0s)
-        {
+        if (tr.getLoopRange().getLength() > 0s)
+        {   // lokator chiziqlari doim ko'rinadi (Cubase), sikl yoqilgan bo'lsa zona bo'yaladi
             const float x1 = vs.secToX (tr.getLoopRange().getStart().inSeconds()), x2 = vs.secToX (tr.getLoopRange().getEnd().inSeconds());
-            g.setColour (red.withAlpha (0.05f)); g.fillRect (x1, 0.0f, x2 - x1, H);
+            if (tr.looping) { g.setColour (red.withAlpha (0.05f)); g.fillRect (x1, 0.0f, x2 - x1, H); }
+            g.setColour ((tr.looping ? red : juce::Colour (0xff8a8780)).withAlpha (tr.looping ? 0.45f : 0.28f));
+            g.fillRect (x1, 0.0f, 1.0f, H); g.fillRect (x2 - 1, 0.0f, 1.0f, H);
         }
         // treklar
         auto tracks = te::getAudioTracks (e);

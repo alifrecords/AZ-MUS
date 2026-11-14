@@ -2,6 +2,7 @@
 //  AZ MUS — panellar: yuqori panel, inspektor, mikser, media brauzer, holat qatori
 // =============================================================================
 #pragma once
+#include "InsertAnalysis.h"
 #include "Arrangement.h"
 #include "PluginPicker.h"
 #include "SampleSync.h"
@@ -508,10 +509,11 @@ inline void showPluginMenu (AppEngine& app, te::AudioTrack& t, std::function<voi
 }
 
 // =============================================================================  Inspektor
-class Inspector : public juce::Component, private juce::Timer
+class Inspector : public juce::Component, public juce::TooltipClient, private juce::Timer
 {
 public:
     std::function<void()> onPluginToggled;
+    std::function<void (const juce::String&)> onStatus;
     Inspector (AppEngine& a, ViewState& v) : app (a), vs (v)
     {
         for (auto* s : { &vol, &pan })
@@ -618,6 +620,19 @@ public:
 
         caps (g, "INSERTLAR", { 14, (float) eqH + 84, 200, 12 });
         auto plugs = AppEngine::userPlugins (*t);
+        const bool fresh = t->state["azInsSig"].toString() == insertSignature (*t) && ! plugs.isEmpty();
+        anRect = {};
+        if (! plugs.isEmpty())
+        {   // tahlil tugmasi + umumiy natija
+            anRect = Rectangle<float> ((float) getWidth() - 86, (float) eqH + 80, 74, 19);
+            g.setColour (fresh ? red.withAlpha (0.12f) : red.withAlpha (0.85f)); g.fillRoundedRectangle (anRect, 5);
+            label (g, U ("\xe2\x86\xbb TAHLIL"), anRect, 9.5f, fresh ? red : (flatTheme() ? Colour (0xff0a0a0a) : Colours::white), Justification::centred, 700);
+            if (fresh && (double) t->state["azInsBase"] >= 0)
+            {
+                const int b0 = roundToInt ((double) t->state["azInsBase"]), b1 = roundToInt ((double) t->state["azInsFinal"]);
+                label (g, String (b0) + U (" \xe2\x86\x92 ") + String (b1), { 88, (float) eqH + 80, anRect.getX() - 94, 19 }, 10, b1 >= b0 ? green : Colour (0xffff5a5a), Justification::centredRight, 700);
+            }
+        }
         slots.clear();
         for (int i = 0; i <= plugs.size(); ++i)
         {
@@ -625,12 +640,31 @@ public:
             slots.add (r);
             if (i == plugs.size()) { panel (g, r, 7, 0.015f, 0.06f); label (g, U ("+  Plagin qo'shish"), r.reduced (12, 0), 11.5f, dim, Justification::centredLeft, 500); break; }
             auto* p = plugs[i];
+            if (dragPlug >= 0 && dragMoved && i == dragPlug) { g.setColour (Colours::white.withAlpha (0.04f)); g.fillRoundedRectangle (r, 7); continue; }   // sudralayotgan joy
             const bool az = pluginDisplayName (*p).startsWithIgnoreCase ("AZ");
             if (az) { g.setColour (red.withAlpha (0.1f)); g.fillRoundedRectangle (r, 7); g.setColour (red.withAlpha (0.35f)); g.drawRoundedRectangle (r.reduced (0.5f), 7, 1); }
             else panel (g, r, 7);
             g.setColour (! p->isEnabled() ? dim2 : az ? red : green); g.fillEllipse (r.getX() + 10, r.getCentreY() - 3, 6, 6);
-            label (g, pluginDisplayName (*p), r.withTrimmedLeft (24).withTrimmedRight (50), 11.5f, p->isEnabled() ? silver : dim2, Justification::centredLeft, az ? 700 : 400);
+            label (g, pluginDisplayName (*p), r.withTrimmedLeft (24).withTrimmedRight (fresh ? 92 : 50), 11.5f, p->isEnabled() ? silver : dim2, Justification::centredLeft, az ? 700 : 400);
             caps (g, p->isSynth() ? "INSTR" : dynamic_cast<te::ExternalPlugin*> (p) ? "VST3" : "FX", r.withTrimmedRight (9), 8.5f, az ? redSoft : dim, Justification::centredRight);
+            if (fresh && p->state.hasProperty ("azDelta"))
+            {   // plagin hissasi: + yashil (yaxshiladi), − qizil (yomonlashtirdi)
+                const double d = p->state["azDelta"]; const int v = roundToInt (d);
+                const auto col = v > 0 ? green : v < 0 ? Colour (0xffff5a5a) : dim;
+                auto pr = Rectangle<float> (r.getRight() - 88, r.getY() + 5, 44, r.getHeight() - 10);
+                g.setColour (col.withAlpha (0.14f)); g.fillRoundedRectangle (pr, 4);
+                label (g, (v > 0 ? "+" : v < 0 ? U ("\xe2\x88\x92") : "") + String (std::abs (v)) + "%", pr, 10.5f, col, Justification::centred, 800);
+            }
+        }
+        if (dragPlug >= 0 && dragMoved && dragPlug < plugs.size())
+        {   // sudrash: qo'yiladigan joy chizig'i + "arvoh" qator
+            const int tgt = dropIndex (plugs.size());
+            const float ly = (float) eqH + 104.0f + (float) tgt * 32 - 2.5f;
+            g.setColour (red); g.fillRoundedRectangle (12, ly - 1, (float) getWidth() - 24, 3, 1.5f);
+            auto gr = Rectangle<float> (12, dragY - 14, (float) getWidth() - 24, 28);
+            g.setColour (bg3.withAlpha (0.95f)); g.fillRoundedRectangle (gr, 7);
+            g.setColour (red.withAlpha (0.8f)); g.drawRoundedRectangle (gr.reduced (0.5f), 7, 1.2f);
+            label (g, pluginDisplayName (*plugs[dragPlug]), gr.withTrimmedLeft (24), 11.5f, text, Justification::centredLeft, 700);
         }
         // ---- sendlar (Group/FX kanallarga)
         {
@@ -667,7 +701,8 @@ public:
     {
         const auto e = ev.withNewPosition (ev.position.translated (0, (float) scrollY));
         auto* t = track(); if (! t) return;
-        dragSend = nullptr;
+        dragSend = nullptr; dragPlug = -1; dragMoved = false;
+        if (anRect.contains (e.position)) { runAnalysis(); return; }
         auto ss = Routing::sends (*t);
         for (int i = 0; i < sendRows.size(); ++i)
             if (sendRows[i].contains (e.position))
@@ -700,6 +735,7 @@ public:
                 }
                 te::Plugin::Ptr p (plugs[i]);
                 if (e.mods.isAltDown()) { p->setEnabled (! p->isEnabled()); refresh(); if (onPluginToggled) onPluginToggled(); return; }   // Alt+bosish = bypass
+                if (! e.mods.isPopupMenu()) { dragPlug = i; dragMoved = false; dragY = e.position.y; return; }   // bosish (oynani ochish) yoki sudrash — mouseUp'da
                 if (e.mods.isPopupMenu())
                 {
                     juce::PopupMenu m; m.addSectionHeader (pluginDisplayName (*p));
@@ -717,8 +753,63 @@ public:
                 return;
             }
     }
-    void mouseDrag (const juce::MouseEvent& e) override
+    int dropIndex (int n) const { return juce::jlimit (0, n, (int) std::floor ((dragY - ((float) eqH + 104.0f) + 16.0f) / 32.0f)); }
+    void runAnalysis()
     {
+        auto* t = track(); if (t == nullptr) return;
+        if (onStatus) onStatus (U ("Insert tahlili: render qilinmoqda..."));
+        juce::Component::SafePointer<Inspector> sp (this);
+        te::Track::Ptr tp (t);
+        juce::MessageManager::callAsync ([sp, tp]
+        {
+            auto* at = dynamic_cast<te::AudioTrack*> (tp.get()); if (sp == nullptr || at == nullptr) return;
+            const auto msg = analyseInserts (sp->app, *at);
+            if (sp != nullptr) if (auto* top = sp->getTopLevelComponent()) top->repaint();
+            if (sp != nullptr) { sp->repaint(); if (sp->onStatus) sp->onStatus (msg); }
+        });
+    }
+    juce::String getTooltip() override
+    {
+        auto* t = track(); if (t == nullptr) return {};
+        const auto pos = getMouseXYRelative().toFloat().translated (0, (float) scrollY);
+        if (anRect.contains (pos)) return U ("Har bir insert ovozni yaxshilayaptimi yoki yomonlashtiryaptimi \xe2\x80\x94 mixing/mastering me'yorlari bo'yicha tahlil (lokatorlar yoki kursordan 20 s)");
+        auto plugs = AppEngine::userPlugins (*t);
+        const bool fresh = t->state["azInsSig"].toString() == insertSignature (*t);
+        for (int i = 0; i < juce::jmin (plugs.size(), slots.size()); ++i)
+            if (slots[i].contains (pos))
+                return pluginDisplayName (*plugs[i]) + "\n" + (fresh ? plugs[i]->state["azDeltaInfo"].toString() : U ("Zanjir o'zgardi \xe2\x80\x94 \xe2\x86\xbb TAHLIL bosing"))
+                     + "\n" + U ("Sudrab tartibni o'zgartiring \xc2\xb7 Alt+bosish = bypass \xc2\xb7 o'ng tugma = menyu");
+        return {};
+    }
+    void mouseUp (const juce::MouseEvent& ev) override
+    {
+        auto* t = track();
+        if (t == nullptr || dragPlug < 0) { dragPlug = -1; return; }
+        auto plugs = AppEngine::userPlugins (*t);
+        const int from = dragPlug; const bool moved = dragMoved;
+        dragPlug = -1; dragMoved = false;
+        if (from >= plugs.size()) { repaint(); return; }
+        if (! moved) { plugs[from]->showWindowExplicitly(); repaint(); return; }
+        int to = dropIndex (plugs.size());
+        if (to == from || to == from + 1) { repaint(); return; }
+        // tartib: ValueTree ichida ko'chirish (undo bilan)
+        auto& um = app.edit->getUndoManager(); um.beginNewTransaction (U ("Insert tartibi"));
+        const int src = t->state.indexOf (plugs[from]->state);
+        int dst = to < plugs.size() ? t->state.indexOf (plugs[to]->state) : t->state.indexOf (plugs.getLast()->state) + 1;
+        if (dst > src) --dst;
+        if (src >= 0 && dst >= 0) t->state.moveChild (src, dst, &um);
+        refresh(); if (onPluginToggled) onPluginToggled();
+        if (onStatus) onStatus (U ("Insert tartibi o'zgardi: ") + pluginDisplayName (*AppEngine::userPlugins (*t)[juce::jmin (to > from ? to - 1 : to, plugs.size() - 1)]) + U (" \xe2\x80\x94 \xe2\x86\xbb TAHLIL bilan qayta baholang"));
+    }
+    void mouseDrag (const juce::MouseEvent& ev) override
+    {
+        if (dragPlug >= 0)
+        {
+            dragY = ev.position.y + (float) scrollY;
+            if (ev.getDistanceFromDragStart() > 4) dragMoved = true;
+            repaint(); return;
+        }
+        const auto& e = ev;
         if (dragSend == nullptr) return;
         dragSend->setGainDb (juce::jlimit (-60.0f, 6.0f, dragStartDb + (float) e.getDistanceFromDragStartX() * 0.25f));
         repaint();
@@ -777,6 +868,7 @@ private:
     juce::Slider vol, pan; juce::ComboBox input;
     EqView eqView { true }; ImagerView imagerView { true }; int scrollY = 0;
     juce::Array<juce::Rectangle<float>> slots; int lastSlots = -1;
+    juce::Rectangle<float> anRect; int dragPlug = -1; bool dragMoved = false; float dragY = 0;
 };
 
 // =============================================================================  Mikser

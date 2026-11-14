@@ -8,6 +8,7 @@
 #include "Beat.h"
 #include "Scope.h"
 #include "TrackTools.h"
+#include "AzVox.h"
 
 namespace az
 {
@@ -190,6 +191,7 @@ inline void registerAzPlugins (te::Engine& e)
     e.getPluginManager().createBuiltInType<AzTrackEqPlugin>();
     e.getPluginManager().createBuiltInType<AzImagerPlugin>();
     e.getPluginManager().createBuiltInType<AzPanPlugin>();
+    e.getPluginManager().createBuiltInType<AzVoxPlugin>();
     syncTrackPansHook = [] (te::Edit& ed) { syncAllTrackPans (ed); };
 }
 

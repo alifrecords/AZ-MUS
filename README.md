@@ -6,6 +6,37 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.18.0: AZ VOX, insert tahlili, Cubase lokatorlari
+
+### AZ VOX · Suno Glue (avtomatik vokal obrobotkasi, 1-bosqich)
+- **ANALIZ** trek audiosini AZ VOX'gacha bo'lgan zanjir bilan render qiladi va ovoz profilini aniqlaydi (masalan, erkak tenor, 214–262 Hz). Keyin barcha bosqichlarni avtomatik sozlaydi va chiqishni o'lchab −18 LUFS ga kalibrlaydi.
+- Bosqichlar:
+  1. **CLEAN**: HPF 24 dB/okt, nafas va shovqin ekspanderi.
+  2. **TONE MATCH**: zamonaviy vokal egri chizig'iga 7 polosali moslash va 2 ta rezonansni kesish.
+  3. **HARMONIC**: yo'qolgan presence va air'ni garmonikalar bilan tiklash.
+  4. **DE-ESS**: dinamik, faqat sibilans paytida.
+  5. **COMP ×2**: FET → Opto, oxirida pik limiter (crest 9–14 dB).
+- Makrolar: CLEAN, WARMTH, BRIGHT, PUNCH, MIX, OUTPUT. A/B solishtirish mavjud.
+- Oynada spektr (hozirgi / maqsad / natija), oldin→keyin diagnozi va jonli GR metrlar bor.
+- XX VOX sinovi: yorqinlik 511 → 1914 Hz, 200 Hz–1 kHz ulushi 94 → 46 %, presence/air 0.65 → 16.6 %, daraja −29.2 → −18.0 LUFS.
+
+### Insertlar
+- Insertlarni sichqoncha bilan sudrab tartibini o'zgartirish mumkin (Ctrl+Z bilan qaytariladi).
+- **↻ TAHLIL**: har bir insertning hissasi foizda ko'rsatiladi. **+ yashil** — yaxshiladi, **− qizil** — yomonlashtirdi.
+  - Baholash mezonlari (vokal yoki mix me'yori): tonal balans, dinamika, piklar, shovqin, keskinlik/sibilans, faza.
+  - Baholash balandlikka bog'liq emas.
+  - Tooltip'da batafsil: qaysi ko'rsatkich nechaga o'zgargani.
+  - Tahlil oralig'i: lokatorlar yoki kursordan 20 s.
+
+### Lokatorlar va kursor (Cubase kabi)
+- Ruler uch qatordan iborat: markerlar, lokator/sikl zonasi, kursor zonasi.
+- Siklni sudrab chizish mumkin; L/R bayroqchalarini sudrash bilan chegaralar o'zgaradi, oraliq ichidan sudralsa butun oraliq ko'chadi. Chegaralar **taktga yopishadi** (Alt — setkaga, Shift — erkin). Uzunlik taktlarda ko'rsatiladi.
+- Oraliqni bosish siklni yoqadi yoki o'chiradi. Ctrl+klik — chap lokator, Alt+klik — o'ng lokator.
+- Lokator chiziqlari sikl o'chiq bo'lsa ham ko'rinadi.
+- Num1 / Num2: lokatorga o'tish. Ctrl+Num1 / Ctrl+Num2: lokatorni kursorga qo'yish.
+- Kursor zonasida bosish kursorni joylaydi, sudrash scrub qiladi.
+- Stop ikkinchi marta bosilsa, kursor ijro boshlangan joyga qaytadi. Loyiha menyusida "Stopda ijro boshlangan joyga qaytish" opsiyasi bor.
+
 ## 0.17.0: Uchinchi mavzu: Sariq (qora + oltin)
 
 - UZ / RU / EN yonidagi mavzu tugmasi endi 3 mavzu orasida almashadi: AZ Qizil → Indigo → **Sariq**.

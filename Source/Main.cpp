@@ -408,6 +408,25 @@ private:
                         if (args.contains ("--dop")) { selectVocal(); zh->main.openDop(); }
                         if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
                         if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
+                        if (args.contains ("--voxdemo"))
+                        {   // test: haqiqiy vokal faylida AZ VOX (ANALIZ + oyna)
+                            const juce::File vf (args[args.indexOf ("--voxdemo") + 1]);
+                            const bool vIns = args.contains ("--voxins"), vNoWin = args.contains ("--nowin");
+                            // callAfterDelay ichida uzoq ish (render) qilinmaydi: taymer ichki tsiklda qayta ishlaydi — callAsync orqali
+                            juce::Timer::callAfterDelay (1500, [this, vf, vIns, vNoWin] { juce::MessageManager::callAsync ([this, vf, vIns, vNoWin]
+                            {
+                                auto& ap = *app;
+                                for (auto* t : te::getAudioTracks (*ap.edit)) ap.edit->deleteTrack (t);
+                                auto* t = ap.addAudioTrack ("XX VOX");
+                                te::AudioFile af (ap.engine, vf);
+                                t->insertWaveClip ("XX VOX", vf, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (af.getLength())), {} }, false);
+                                auto p = ap.insertPlugin (*t, "azvox", {});
+                                if (auto* vx = dynamic_cast<az::AzVoxPlugin*> (p.get())) std::fprintf (stderr, "%s\n", az::analyseVox (*vx).toRawUTF8());
+                                if (vIns) { std::fprintf (stderr, "%s\n", az::analyseInserts (ap, *t).toRawUTF8()); if (p) std::fprintf (stderr, "%s\n", p->state["azDeltaInfo"].toString().toRawUTF8()); }
+                                if (mainWindow != nullptr) if (auto* z = dynamic_cast<ZoomHost*> (mainWindow->getContentComponent())) { z->main.selectTrack (t); z->main.refreshAll(); }
+                                if (p != nullptr && ! vNoWin) p->showWindowExplicitly();
+                            }); });
+                        }
                         if (args.contains ("--importdemo"))
                         {
                             juce::StringArray fs;

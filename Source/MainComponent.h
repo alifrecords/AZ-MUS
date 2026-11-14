@@ -135,7 +135,9 @@ public:
         headers.onTracksReordered = [this] { mixer.rebuild(); refreshAll(); };
         mixer.onTracksReordered = [this] { refreshAll(); };
         inspector.onPluginToggled = [this] { mixer.rebuildIfNeeded(); };
+        inspector.onStatus = [this] (const juce::String& m) { toast (m); };
         lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); else rateHint (f); };
+        ruler.onLocatorsChanged = [this] { lanes.repaint(); };
         lanes.onMultiDrop = [this] (const juce::StringArray& files, te::AudioTrack* target, te::TimePosition at) { multiImport (files, target, at); };
         lanes.onRestoreOriginal = [this] (te::WaveAudioClip& c)
         {
@@ -539,20 +541,42 @@ public:
     {
         if (! app.edit) return;
         auto& t = app.edit->getTransport();
-        if (t.isPlaying()) { const bool rec = t.isRecording(); t.stop (false, false); lanes.recStart.reset(); if (rec) app.saveIfPossible(); }
-        else t.play (false);
+        if (t.isPlaying()) { const bool rec = t.isRecording(); t.stop (false, false); lanes.recStart.reset(); if (returnToStart()) t.setPosition (startPos); if (rec) app.saveIfPossible(); }
+        else { startPos = t.getPosition(); t.play (false); }
         refreshAll();
     }
-    void play() { if (app.edit && ! app.edit->getTransport().isPlaying()) app.edit->getTransport().play (false); refreshAll(); }
+    void play() { if (app.edit && ! app.edit->getTransport().isPlaying()) { startPos = app.edit->getTransport().getPosition(); app.edit->getTransport().play (false); } refreshAll(); }
+    // Cubase: to'xtatish. "Stopda boshlangan joyga qaytish" yoqilgan bo'lsa — ijro boshlangan joyga;
+    // to'xtagan holatda yana Stop — avval boshlangan joyga, u yerda bo'lsa — loyiha boshiga.
     void stop()
     {
         if (! app.edit) return;
         auto& t = app.edit->getTransport();
-        if (! t.isPlaying()) t.setPosition (0s);
+        if (! t.isPlaying())
+        {
+            t.setPosition (std::abs ((t.getPosition() - startPos).inSeconds()) < 1e-3 ? te::TimePosition() : startPos);
+            refreshAll(); return;
+        }
         const bool rec = t.isRecording();
         t.stop (false, false); lanes.recStart.reset();
+        if (returnToStart()) t.setPosition (startPos);
         if (rec) app.saveIfPossible();
         refreshAll();
+    }
+    bool returnToStart() const { return app.engine.getPropertyStorage().getPropertiesFile().getBoolValue ("azReturnToStart", false); }
+    void gotoLocator (bool left)
+    {
+        if (! app.edit) return; auto& t = app.edit->getTransport(); ensureLoop();
+        t.setPosition (left ? t.getLoopRange().getStart() : t.getLoopRange().getEnd()); refreshAll();
+    }
+    void setLocator (bool left)
+    {
+        if (! app.edit) return; auto& t = app.edit->getTransport();
+        const auto p = t.getPosition(); auto r = t.getLoopRange();
+        if (r.getLength() <= 0s) { ensureLoop(); r = t.getLoopRange(); }
+        auto a = left ? p : r.getStart(), b = left ? r.getEnd() : p;
+        if (b <= a) { if (left) b = a + (r.getLength() > 0s ? r.getLength() : 4s); else a = juce::jmax (te::TimePosition(), b - (r.getLength() > 0s ? r.getLength() : 4s)); }
+        t.setLoopRange ({ a, b }); toast (left ? U ("Chap lokator kursorga qo'yildi") : U ("O'ng lokator kursorga qo'yildi")); refreshAll();
     }
     void toStart() { if (app.edit) app.edit->getTransport().setPosition (0s); refreshAll(); }
     void toEnd()   { if (app.edit) app.edit->getTransport().setPosition (te::TimePosition() + app.edit->getLength()); refreshAll(); }
@@ -688,6 +712,11 @@ public:
         if (code == KP::numberPadMultiply || (! ctrl && k.getTextCharacter() == '*')) { toggleRecord(); return true; }
         if (code == KP::numberPadDivide   || (! ctrl && k.getTextCharacter() == '/')) { toggleLoop(); return true; }
         if (code == KP::numberPad0)        { stop(); return true; }
+        if (code == KP::numberPad1 || code == KP::numberPad2)   // Cubase: Num1/Num2 = lokatorga o'tish, Ctrl+Num1/2 = lokatorni kursorga qo'yish
+        {
+            if (ctrl) setLocator (code == KP::numberPad1); else gotoLocator (code == KP::numberPad1);
+            return true;
+        }
         if (code == KP::deleteKey || code == KP::backspaceKey) { deleteSelected(); return true; }   // (Windows'da Num Del bilan bir xil kod)
         if (code == KP::numberPadDecimalPoint) { toStart(); return true; }
         if (code == KP::numberPadAdd)      { nudge (1); return true; }
@@ -764,7 +793,9 @@ public:
                       juce::PopupMenu pl; const auto cur = app.edit ? projectPanLaw (*app.edit) : te::PanLaw3dBCenter;
                       for (auto l : { te::PanLawLinear, te::PanLaw2point5dBCenter, te::PanLaw3dBCenter, te::PanLaw4point5dBCenter, te::PanLaw6dBCenter })
                           pl.addItem (1200 + (int) l, panLawName (l) + (l == te::PanLaw3dBCenter ? U ("  (Cubase standarti, equal power)") : l == te::PanLaw2point5dBCenter ? juce::String ("  (Pro Tools)") : juce::String()), true, cur == l);
-                      m.addSubMenu (U ("Pan qonuni (mono treklar)"), pl); break; }
+                      m.addSubMenu (U ("Pan qonuni (mono treklar)"), pl); m.addSeparator();
+                      m.addItem (1210, U ("Stopda ijro boshlangan joyga qaytish (Cubase)"), true, returnToStart());
+                      m.addItem (1211, U ("Lokatorlarni tanlangan kliplarga qo'yish"), true, false); break; }
             case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
                     add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); m.addSeparator();
                     add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); add (48, "Barcha audiolarni asl holiga qaytarish (tempo, ton)"); add (49, "Import so'rovini qayta yoqish (bir nechta fayl)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
@@ -790,6 +821,8 @@ public:
                 if (app.edit) { app.edit->getUndoManager().beginNewTransaction ("Pan qonuni"); app.edit->state.setProperty ("azPanLaw", id - 1200, &app.edit->getUndoManager());
                                 syncAllTrackPans (*app.edit); headers.repaint(); toast (U ("Mono treklar pan qonuni: ") + panLawName ((te::PanLaw) (id - 1200))); }
                 break;
+            case 1210: { auto& pf = app.engine.getPropertyStorage().getPropertiesFile(); pf.setValue ("azReturnToStart", ! returnToStart()); pf.saveIfNeeded(); } break;
+            case 1211: locators(); break;
             case 1: if (onRequestNew) onRequestNew(); break;
             case 2: chooseFile (U ("Loyihani ochish"), "*.azmus;*.tracktionedit", false, [this] (juce::File f) { if (onRequestOpen) onRequestOpen (f); }); break;
             case 8: if (onRequestHome) onRequestHome(); break;
@@ -1027,13 +1060,14 @@ private:
             lastPos = pos;
             top.refreshState();
         }
-        if (++slow % 15 == 0) { top.refreshState(); status.repaint(); headers.repaint(); syncAllTrackPans (*app.edit); }
+        if (++slow % 15 == 0) { top.refreshState(); status.repaint(); headers.repaint(); if (! analysisBusy() && ! app.edit->isRendering()) syncAllTrackPans (*app.edit); }
         if (slow % 3 == 0) headers.repaint (headers.getWidth() - 12, 0, 12, headers.getHeight());
     }
 
     AppEngine& app;
     ViewState vs;
     TopBar top; GridBar gridBar; Inspector inspector;
+    te::TimePosition startPos;
     bool editorOpen = false; juce::TextButton lowMixB, lowEdB; TimeRuler ruler; TrackHeaders headers; Lanes lanes; Mixer mixer; MediaBrowser media; StatusBar status; AudioEditor editor;
     juce::TextButton toolAdd, toolSnap, toolBounce;
     juce::OwnedArray<juce::TextButton> tools;

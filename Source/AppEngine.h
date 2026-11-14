@@ -258,7 +258,7 @@ struct UIBehaviour : public te::UIBehaviour
         }
         struct W : juce::ThreadWithProgressWindow
         {
-            W (te::ThreadPoolJobWithProgress& j) : juce::ThreadWithProgressWindow (juce::String::fromUTF8 ("Eksport qilinmoqda\xe2\x80\xa6"), true, false), job (j) {}
+            W (te::ThreadPoolJobWithProgress& j) : juce::ThreadWithProgressWindow (j.getJobName().containsIgnoreCase ("tahlil") ? juce::String::fromUTF8 ("Tahlil qilinmoqda\xe2\x80\xa6") : juce::String::fromUTF8 ("Eksport qilinmoqda\xe2\x80\xa6"), true, false), job (j) {}
             void run() override
             {
                 while (! threadShouldExit() && job.runJob() == juce::ThreadPoolJob::jobNeedsRunningAgain)
@@ -284,6 +284,7 @@ struct UIBehaviour : public te::UIBehaviour
 // ---------------------------------------------------------------- Ichki plaginlar ro'yxati
 struct BuiltIn { const char* name; const char* xmlType; bool synth; };
 inline const BuiltIn builtIns[] = {
+    { "AZ VOX (avtomatik vokal obrobotka)", "azvox", false },
     { "AZ EQ (4 polosali)",  "4bandEq",       false },
     { "AZ Kompressor",       "compressor",    false },
     { "AZ Reverb (oddiy)",   "reverb",        false },

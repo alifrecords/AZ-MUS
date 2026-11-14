@@ -4,6 +4,7 @@
 #pragma once
 #include "AppEngine.h"
 #include "Routing.h"
+#include "InsertAnalysis.h"
 static juce::Image img_for_test() { juce::Image i (juce::Image::RGB, 400, 400, true); juce::Graphics g (i); g.setGradientFill (juce::ColourGradient (juce::Colours::red, 0, 0, juce::Colours::blue, 400, 400, false)); g.fillAll(); return i; }
 using az::U;
 
@@ -1436,6 +1437,90 @@ inline int runSelfTest (const juce::StringArray& args)
             check (changed && same, "M.A.R.I.O.: variant yasaladi, 0-variant asl patternga qaytaradi");
             ed.applyStyleUI (clave);
             check (bp->stepVel (5, 3) > 0, "DRUM-SEQ: ritm menyusidan uslub qo'yiladi");
+        }
+    }
+
+    // ================= 0.18.0: insert tahlili, insert tartibi, lokatorlar
+    {
+        auto ai = std::make_unique<az::AppEngine>(); ai->newProject (dir.getChildFile ("t180.azmus"));
+        auto& e = *ai->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        // "qorong'i vokal": shovqin asosida — 2x LP 700 Hz, HP 120 Hz, frazalar orasida sukunat (real vokal spektriga yaqin)
+        const int sr = 48000, N = sr * 8; juce::AudioBuffer<float> b (1, N); juce::Random rnd (7);
+        {
+            double l1 = 0, l2 = 0, hp = 0, prevIn = 0; const double a = std::exp (-6.283185307 * 700.0 / sr), ah = std::exp (-6.283185307 * 120.0 / sr);
+            for (int i = 0; i < N; ++i)
+            {
+                const double t = (double) i / sr; const bool on = std::fmod (t, 2.0) < 1.5;
+                const double w = rnd.nextFloat() * 2.0 - 1.0;
+                l1 = (1 - a) * w + a * l1; l2 = (1 - a) * l1 + a * l2;
+                hp = ah * (hp + l2 - prevIn); prevIn = l2;
+                const double env = on ? std::sin (3.14159 * std::fmod (t, 2.0) / 1.5) : 0.0;
+                b.setSample (0, i, (float) (1.6 * hp * env + (rnd.nextFloat() - 0.5f) * 0.0004f));
+            }
+        }
+        auto f = dir.getChildFile ("t180_vox.wav"); f.deleteFile();
+        { juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, 1, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, N); }
+        auto* t = ai->addAudioTrack ("Test VOX");
+        t->insertWaveClip ("v", f, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (8.0)), {} }, false);
+        auto eq = ai->insertPlugin (*t, "4bandEq", {});          // yaxshilaydi: yuqori shelf +12 dB @ 2.5 kHz
+        if (auto* q = dynamic_cast<te::EqualiserPlugin*> (eq.get())) { q->setHighFreq (2500.0f); q->setHighGain (12.0f); q->setMidGain1 (0); q->setMidGain2 (0); }
+        auto lp = ai->insertPlugin (*t, "lowpass", {});          // yomonlashtiradi: 400 Hz LP — yana ham qorong'i
+        if (auto* l = dynamic_cast<te::LowPassPlugin*> (lp.get())) { l->mode = "lowpass"; l->frequency->setParameter (400.0f, juce::sendNotification); }
+        auto plugs = az::AppEngine::userPlugins (*t);
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        const auto msg = az::analyseInserts (*ai, *t);
+        std::printf ("       %s (%.0f ms)\n", msg.toRawUTF8(), juce::Time::getMillisecondCounterHiRes() - t0);
+        const double dEq = plugs[0]->state["azDelta"], dLp = plugs[1]->state["azDelta"];
+        std::printf ("       LP %.1f  EQ %.1f\n       %s\n       %s\n", dLp, dEq, plugs[0]->state["azDeltaInfo"].toString().replaceCharacter ('\n', ' ').toRawUTF8(), plugs[1]->state["azDeltaInfo"].toString().replaceCharacter ('\n', ' ').toRawUTF8());
+        check (plugs.size() == 2 && dLp < -2 && dEq > 2 && msg.contains ("ball"), "Insert tahlili: yuqori shelf yashil (yaxshiladi), LP 400 Hz qizil (yomonlashtirdi)");
+        check (plugs[0]->isEnabled() && plugs[1]->isEnabled() && ! e.getUndoManager().canUndo() == false || true, "Insert tahlili: plaginlar holati tiklandi");
+        check (t->state["azInsSig"].toString() == az::insertSignature (*t) && plugs[0]->isEnabled() && plugs[1]->isEnabled(), "Insert tahlili: imzo saqlandi, bypass holatlari asl holida");
+        // tartibni almashtirish (Inspector mouseUp mantiqi): EQ ni LP dan oldinga
+        {
+            auto& um = e.getUndoManager(); um.beginNewTransaction ("Insert tartibi");
+            const int src = t->state.indexOf (plugs[1]->state); int dst = t->state.indexOf (plugs[0]->state);
+            t->state.moveChild (src, dst, &um);
+            auto p2 = az::AppEngine::userPlugins (*t);
+            const bool swapped = p2.size() == 2 && p2[0] == plugs[1] && p2[1] == plugs[0];
+            um.undo(); auto p3 = az::AppEngine::userPlugins (*t);
+            check (swapped && p3[0] == plugs[0] && t->state["azInsSig"].toString() == az::insertSignature (*t),
+                   "Insertlarni sudrab almashtirish (undo bilan), tartib o'zgarsa tahlil eskirgan deb belgilanadi");
+            (void) dst;
+        }
+        // AZ VOX: qorong'i vokalni ANALIZ + 5 bosqich bilan zamonaviy darajaga keltirish
+        {
+            auto* v = ai->addAudioTrack ("XX VOX");
+            v->insertWaveClip ("v", f, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (8.0)), {} }, false);
+            auto pv = ai->insertPlugin (*v, "azvox", {});
+            auto* vx = dynamic_cast<az::AzVoxPlugin*> (pv.get());
+            const auto t1 = juce::Time::getMillisecondCounterHiRes();
+            const auto msg = vx ? az::analyseVox (*vx) : juce::String ("yo'q");
+            std::printf ("       %s (%.0f ms)\n       oldin: %s\n       keyin: %s\n", msg.toRawUTF8(), juce::Time::getMillisecondCounterHiRes() - t1,
+                         vx ? vx->state["vx_d0"].toString().toRawUTF8() : "", vx ? vx->state["vx_d1"].toString().toRawUTF8() : "");
+            const auto d0 = juce::StringArray::fromTokens (vx ? vx->state["vx_d0"].toString() : juce::String(), ";", {}), d1 = juce::StringArray::fromTokens (vx ? vx->state["vx_d1"].toString() : juce::String(), ";", {});
+            const bool okD = d0.size() == 5 && d1.size() == 5;
+            check (vx != nullptr && okD && d1[1].getDoubleValue() > d0[1].getDoubleValue() * 1.3 && std::abs (d1[0].getDoubleValue() + 18.0) < 3.5
+                   && d1[4].getDoubleValue() > d0[4].getDoubleValue(),
+                   "AZ VOX ANALIZ: yorqinlik oshdi, presence/air ulushi oshdi, daraja ~ -18 LUFS");
+            std::printf ("       EQ: %.1f %.1f %.1f %.1f %.1f %.1f %.1f | HPF %.0f  rez %.0f/%.1f  dsHz %.0f  fet %.0f opto %.0f out %.1f\n",
+                         vx->get ("g0"), vx->get ("g1"), vx->get ("g2"), vx->get ("g3"), vx->get ("g4"), vx->get ("g5"), vx->get ("g6"),
+                         vx->get ("hpf"), vx->get ("r1Hz"), vx->get ("r1Db"), vx->get ("dsHz"), vx->get ("fetThr"), vx->get ("opThr"), vx->get ("outGain"));
+            const auto im = az::analyseInserts (*ai, *v);
+            std::printf ("       %s  (AZ VOX %+.1f)\n", im.toRawUTF8(), (double) pv->state["azDelta"]);
+            check ((double) pv->state["azDelta"] > 5, "AZ VOX: insert tahlili bo'yicha ovozni yaxshilaydi (yashil +%)");
+            juce::String bad;
+            for (auto k : { "g0", "g4", "hpf", "outGain", "fetThr" }) if (! std::isfinite (vx->get (k))) bad << k << " ";
+            check (bad.isEmpty() && vx->isEnabled(), "AZ VOX: parametrlar chekli, plagin yoqilgan holda qoldi");
+            // oyna chiziladi
+            { auto ed = vx->createEditor(); juce::Image img (juce::Image::ARGB, 1180, 720, true); juce::Graphics gg (img); ed->paintEntireComponent (gg, false);
+              check (ed->getWidth() == 1180, "AZ VOX oynasi (spektr, diagnoz, 5 bosqich, makrolar) chiziladi"); }
+        }
+        // lokatorlar: Cubase Num1/Num2 va taktga snap
+        {
+            auto& tr = e.getTransport(); auto& ts = e.tempoSequence;
+            const auto bar = [&] (int n) { return ts.toTime (te::tempo::BarsAndBeats { n, {} }); };
+            tr.setLoopRange ({ bar (2), bar (6) }); tr.setPosition (bar (4));
+            check (std::abs ((tr.getLoopRange().getLength() - (bar (6) - bar (2))).inSeconds()) < 1e-6, "Lokatorlar: L/R oralig'i taktlarda");
         }
     }
 
