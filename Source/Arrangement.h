@@ -986,9 +986,20 @@ public:
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         dropHint = false;
-        for (auto& f : files) importAt (juce::File (f), x, y);
+        juce::StringArray audio;
+        for (auto& f : files)
+        {
+            const juce::File fl (f);
+            if (fl.isDirectory()) { for (const auto& e : juce::RangedDirectoryIterator (fl, false, "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg", juce::File::findFiles)) audio.add (e.getFile().getFullPathName()); }
+            else if (fl.hasFileExtension ("mid;midi")) importAt (fl, x, y);
+            else audio.add (f);
+        }
+        // bir nechta audio: Cubase kabi "Import parametrlari" so'raladi (alohida treklar / bitta trek)
+        if (audio.size() > 1 && onMultiDrop) onMultiDrop (audio, trackAtY (y), snapTime (*app.edit, vs.xToSec ((float) x), vs));
+        else for (auto& f : audio) importAt (juce::File (f), x, y);
         repaint();
     }
+    std::function<void (const juce::StringArray&, te::AudioTrack*, te::TimePosition)> onMultiDrop;
     std::function<void (te::WaveAudioClip&, const juce::File&)> onAudioImported;
     static juce::File dragFile (const SourceDetails& d)
     {

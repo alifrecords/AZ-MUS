@@ -1436,6 +1436,59 @@ inline int runSelfTest (const juce::StringArray& args)
         }
     }
 
+    // ================= 0.16.1: bir nechta audio tashlash — Import parametrlari (Cubase "Import Options")
+    {
+        auto ai = std::make_unique<az::AppEngine>(); ai->newProject (dir.getChildFile ("t161.azmus"));
+        auto& e = *ai->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        auto sd = dir.getChildFile ("TREK"); sd.deleteRecursively(); sd.createDirectory();
+        auto mk = [&] (const juce::String& n, int sr, double dur)
+        {
+            const int N = (int) (sr * dur); juce::AudioBuffer<float> b (2, N);
+            for (int i = 0; i < N; ++i) { const float v = 0.2f * std::sin ((float) (6.283185307 * 220.0 * i / sr)); b.setSample (0, i, v); b.setSample (1, i, v); }
+            juce::WavAudioFormat wav; if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (sd.getChildFile (n)), sr, 2, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, N);
+            return sd.getChildFile (n).getFullPathName();
+        };
+        juce::StringArray paths { mk ("XX VOX.wav", 44100, 3.0), mk ("XX BASS.wav", 48000, 3.0), mk ("XX BD.wav", 44100, 3.0) };
+        auto files = az::scanImportFiles (ai->engine, paths);
+        auto& pf = ai->engine.getPropertyStorage().getPropertiesFile();
+        { az::ImportOptionsPanel panel (files, 44100.0, pf); panel.setSize (680, 560); juce::Image im (juce::Image::ARGB, 680, 560, true); juce::Graphics g (im); panel.paintEntireComponent (g, false);
+          check (files.size() == 3 && files[1].rate == 48000 && panel.current (az::ImportOptions::differentTracks).convertRate, "Import oynasi: fayllar ro'yxati, sample rate farqi aniqlanadi (Cubase Import Options)"); }
+        az::ImportOptions o; o.mode = az::ImportOptions::differentTracks; o.convertRate = true; o.copyToProject = true; o.sortByName = true;
+        std::sort (files.begin(), files.end(), [] (const az::ImportFileInfo& a, const az::ImportFileInfo& b) { return a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
+        const auto pdir = dir.getChildFile ("t161 Audio");
+        juce::Array<juce::File> ready; juce::StringArray errs;
+        az::prepareImportFiles (ai->engine, files, o, 44100.0, pdir, ready, errs);
+        bool inDir = true; for (auto& f : ready) inDir &= f.isAChildOf (pdir);
+        const double r1 = az::dop::fileRate (ai->engine, ready[1]);
+        check (ready.size() == 3 && inDir && std::abs (r1 - 44100.0) < 0.5, "Import: loyiha papkasiga nusxalandi, 48k fayl 44.1k ga o'girildi");
+        {   // nusxalash o'chiq bo'lsa ham konvert qilingan fayl asl papkani ifloslamaydi
+            auto o2 = o; o2.copyToProject = false; juce::Array<juce::File> r2; juce::StringArray e2;
+            const auto pdir2 = dir.getChildFile ("t161b Audio");
+            az::prepareImportFiles (ai->engine, files, o2, 44100.0, pdir2, r2, e2);
+            check (r2.size() == 3 && r2[0].isAChildOf (pdir2) && r2[1] == files[1].file && sd.getNumberOfChildFiles (juce::File::findFiles) == 3,
+                   "Import: konvertatsiya nusxasi loyiha papkasiga, foydalanuvchi papkasi toza qoladi");
+        }
+        auto mc = std::make_unique<az::MainComponent> (*ai); mc->setSize (1400, 860);
+        mc->placeImported (ready, {}, o, {}, te::TimePosition::fromSeconds (2.0));
+        auto ts = te::getAudioTracks (e);
+        bool aligned = ts.size() == 3; juce::StringArray names;
+        for (auto* t : ts) { names.add (t->getName()); aligned &= t->getClips().size() == 1 && std::abs (t->getClips()[0]->getPosition().getStart().inSeconds() - 2.0) < 1e-6; }
+        std::printf ("       alohida treklar: %s\n", names.joinIntoString (", ").toRawUTF8());
+        check (aligned && names[0] == "XX BASS" && names[1] == "XX BD" && names[2] == "XX VOX", "Alohida treklar: har fayl o'z trekida, hammasi bir vaqtda (nomlar tartibda)");
+        o.mode = az::ImportOptions::oneTrack;
+        mc->placeImported (ready, {}, o, ts[0]->itemID, te::TimePosition());
+        auto* t0 = te::getAudioTracks (e)[0];
+        bool seq = t0->getClips().size() == 4;   // 1 avvalgi + 3 ketma-ket
+        double prevEnd = 0; int cnt = 0;
+        for (auto* c : t0->getClips()) if (c->getPosition().getStart().inSeconds() < 1.99 || cnt > 0) {}
+        juce::Array<double> starts; for (auto* c : t0->getClips()) starts.add (c->getPosition().getStart().inSeconds());
+        starts.sort();
+        std::printf ("       bitta trek: %d klip, boshlanishlar %.2f %.2f %.2f %.2f\n", t0->getClips().size(), starts[0], starts[1], starts[2], starts[3]);
+        check (seq && std::abs (starts[0]) < 1e-6 && std::abs (starts[1] - 2.0) < 0.01 && std::abs (starts[2] - 3.0) < 0.01 && std::abs (starts[3] - 6.0) < 0.01, "Bitta trek: fayllar ketma-ket joylanadi");
+        juce::ignoreUnused (prevEnd);
+        mc.reset();
+    }
+
     app2.reset(); app.reset();
     std::printf ("%s: %d ta xato\n", fails == 0 ? "NATIJA: HAMMASI O'TDI" : "NATIJA: XATOLAR BOR", fails);
     return fails == 0 ? 0 : 1;

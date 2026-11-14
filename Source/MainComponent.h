@@ -8,6 +8,7 @@
 #include "PianoRoll.h"
 #include "Connections.h"
 #include "Hub.h"
+#include "ImportDialog.h"
 
 namespace az
 {
@@ -135,6 +136,7 @@ public:
         mixer.onTracksReordered = [this] { refreshAll(); };
         inspector.onPluginToggled = [this] { mixer.rebuildIfNeeded(); };
         lanes.onAudioImported = [this] (te::WaveAudioClip& c, const juce::File& f) { if (auto m = media.applySync (c, f); m.isNotEmpty()) toast (U ("Sinxron: ") + m); else rateHint (f); };
+        lanes.onMultiDrop = [this] (const juce::StringArray& files, te::AudioTrack* target, te::TimePosition at) { multiImport (files, target, at); };
         lanes.onRestoreOriginal = [this] (te::WaveAudioClip& c)
         {
             juce::Array<te::WaveAudioClip*> cl; for (auto* x : selectedAudioClips()) cl.addIfNotAlreadyThere (x); cl.addIfNotAlreadyThere (&c);
@@ -238,6 +240,72 @@ public:
         if (skipped > 0) m << U (" \xc2\xb7 ") << skipped << U (" tasi allaqachon mos");
         if (failed > 0) m << U (" \xc2\xb7 ") << failed << U (" tasi xato: ") << err;
         return m;
+    }
+    // ---------------------------------------------------------------- bir nechta audio import (Cubase "Import Options")
+    void multiImport (const juce::StringArray& paths, te::AudioTrack* target, te::TimePosition at)
+    {
+        if (! app.edit) return;
+        auto files = scanImportFiles (app.engine, paths);
+        auto& pf = app.engine.getPropertyStorage().getPropertiesFile();
+        const double pr = sampleRate() > 0 ? sampleRate() : 44100.0;
+        juce::Component::SafePointer<MainComponent> sp (this);
+        auto go = [sp, files, trackId = target ? target->itemID : te::EditItemID(), at, pr] (ImportOptions o) mutable
+        {
+            if (sp == nullptr || o.mode == ImportOptions::cancel || ! sp->app.edit) return;
+            if (o.sortByName) std::sort (files.begin(), files.end(), [] (const ImportFileInfo& a, const ImportFileInfo& b) { return a.file.getFileName().compareNatural (b.file.getFileName()) < 0; });
+            const auto ef = sp->app.editFile;
+            const auto dir = ef.getParentDirectory().getChildFile (ef.getFileNameWithoutExtension() + " Audio");
+            auto* job = new ImportPrepareJob (sp->app.engine, files, o, pr, dir, [sp, o, trackId, at] (juce::Array<juce::File> ready, juce::StringArray errs)
+            {
+                if (sp != nullptr) sp->placeImported (ready, errs, o, trackId, at);
+            });
+            job->launchThread();
+        };
+        if (pf.getBoolValue ("azImpDontAsk", false))
+        {
+            ImportOptions o; o.mode = (ImportOptions::Mode) juce::jlimit (1, 2, pf.getIntValue ("azImpMode", 1));
+            o.copyToProject = pf.getBoolValue ("azImpCopy", false); o.convertRate = pf.getBoolValue ("azImpConvert", true); o.sortByName = pf.getBoolValue ("azImpSort", true);
+            go (o);
+        }
+        else showImportOptions (this, files, pr, pf, go);
+    }
+    void placeImported (const juce::Array<juce::File>& ready, const juce::StringArray& errs, ImportOptions o, te::EditItemID targetId, te::TimePosition at)
+    {
+        if (! app.edit || ready.isEmpty()) { if (! errs.isEmpty()) toast (U ("Import xatosi: ") + errs.joinIntoString (", ")); return; }
+        app.edit->getUndoManager().beginNewTransaction ("Import");
+        te::AudioTrack* target = nullptr;
+        for (auto* t : te::getAudioTracks (*app.edit)) if (t->itemID == targetId) target = t;
+        auto isEmptyAudio = [] (te::AudioTrack* t) { return t != nullptr && t->getClips().isEmpty() && AppEngine::userPlugins (*t).isEmpty(); };
+        int placed = 0; te::AudioTrack* last = nullptr;
+        if (o.mode == ImportOptions::oneTrack)
+        {
+            auto* t = target != nullptr ? target : app.addAudioTrack (ready[0].getParentDirectory().getFileName());
+            auto pos = at;
+            for (auto& f : ready)
+                if (auto c = app.importAudio (*t, f, pos)) { pos = c->getPosition().getEnd(); ++placed; }
+            last = t;
+        }
+        else
+        {
+            te::Track* after = target;
+            for (int i = 0; i < ready.size(); ++i)
+            {
+                const auto name = ready[i].getFileNameWithoutExtension().upToLastOccurrenceOf ("_44.1k", false, false).upToLastOccurrenceOf ("_48k", false, false);
+                te::AudioTrack* t = nullptr;
+                if (i == 0 && isEmptyAudio (target)) { t = target; t->setName (name); }
+                else t = app.addAudioTrackAfter (name, after);
+                if (t == nullptr) continue;
+                if (app.importAudio (*t, ready[i], at)) ++placed;
+                after = t; last = t;
+            }
+        }
+        if (last) vs.selectedTrack = last->itemID;
+        vs.changed();
+        juce::String m = juce::String (placed) + U (" ta audio ") + (o.mode == ImportOptions::oneTrack ? U ("bitta trekka joylandi") : U ("alohida treklarga joylandi"));
+        if (o.convertRate) m << U (" \xc2\xb7 sample rate moslandi");
+        if (o.copyToProject) m << U (" \xc2\xb7 loyiha papkasiga nusxalandi");
+        if (! errs.isEmpty()) m << U (" \xc2\xb7 xato: ") << errs.size();
+        toast (m);
     }
     juce::String restoreClips (const juce::Array<te::WaveAudioClip*>& clips)
     {
@@ -695,7 +763,7 @@ public:
             case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
             case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
                     add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); m.addSeparator();
-                    add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); add (48, "Barcha audiolarni asl holiga qaytarish (tempo, ton)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
+                    add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); add (48, "Barcha audiolarni asl holiga qaytarish (tempo, ton)"); add (49, "Import so'rovini qayta yoqish (bir nechta fayl)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
             case 4: add (50, "MIDI import..."); add (51, "MIDI qurilmalarni qayta skanerlash"); break;
             case 5: add (60, "Inspektor", "Alt+I", showInsp); add (61, "Media brauzer", "F5", showMedia); add (62, "Mikser", "F3", showMixer); add (66, "Mikserni alohida oynaga ajratish / qaytarish", "", mixerWindow != nullptr); m.addSeparator();
                     add (63, "Hammasini ekranga sig'dirish", "Ctrl+Shift+A"); add (64, "Kattalashtirish", "H"); add (65, "Kichiklashtirish", "G"); break;
@@ -757,6 +825,7 @@ public:
             case 44: openDop(); break;
             case 47: convertAllToDaw(); break;
             case 48: restoreAll(); break;
+            case 49: app.engine.getPropertyStorage().getPropertiesFile().setValue ("azImpDontAsk", false); toast (U ("Bir nechta fayl tashlanganda yana so'raladi")); break;
             case 45: openRender(); break;
             case 46: quantizeSelected(); break;
             case 66: toggleMixerWindow(); break;

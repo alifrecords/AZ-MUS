@@ -476,6 +476,16 @@ public:
         return t.get();
     }
 
+    // berilgan trekdan keyin yangi audio trek (import: treklar tartibi saqlanadi)
+    te::AudioTrack* addAudioTrackAfter (const juce::String& name, te::Track* after)
+    {
+        auto t = edit->insertNewAudioTrack (te::TrackInsertPoint (nullptr, after != nullptr ? after : lastTrack()), nullptr);
+        if (t == nullptr) return nullptr;
+        t->setName (name);
+        t->setColour (trackColours[(te::getAudioTracks (*edit).size() - 1) % 8]);
+        return t.get();
+    }
+
     te::AudioTrack* addInstrumentTrack (const juce::String& name, const juce::PluginDescription* desc = nullptr)
     {
         auto* t = addAudioTrack (name);

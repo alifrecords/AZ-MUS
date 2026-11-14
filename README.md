@@ -6,6 +6,15 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.16.1: Bir nechta audio — Import parametrlari (Cubase uslubida)
+
+- Explorerdan bir nechta audio (yoki papka) belgilab DAW ga tashlanganda **Import parametrlari** oynasi ochiladi: fayllar ro'yxati (sample rate, bit, stereo/mono, davomiylik). Loyihaga mos kelmaydigan sample rate sariq rangda ko'rsatiladi.
+- **Alohida treklar** (Enter): har bir fayl o'z trekiga tushadi va hammasi bir nuqtadan boshlanadi (stemlar uchun). Bo'sh trek ustiga tashlansa, birinchi fayl shu trekka joylanadi.
+- **Bitta trek**: fayllar bitta trekka ketma-ket qo'yiladi. **Bekor qilish** (Esc).
+- Parametrlar: loyiha papkasiga nusxalash (Copy Files to Working Directory), loyiha sample rate'iga o'girish, fayl nomi bo'yicha tartiblash, "Boshqa so'ramaslik".
+- O'girilgan nusxalar har doim loyihaning "<nom> Audio" papkasiga yoziladi, sizning asl papkangizga hech narsa yozilmaydi.
+- So'rovni qayta yoqish: Audio → "Import so'rovini qayta yoqish (bir nechta fayl)". Butun import bitta Undo bilan bekor qilinadi.
+
 ## 0.16.0: AZ BEAT — metrlar, ritm kutubxonasi va DRUM-SEQ (Transfuser)
 
 | Bo'lim | Nima qilindi |

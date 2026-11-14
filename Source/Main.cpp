@@ -408,6 +408,13 @@ private:
                         if (args.contains ("--dop")) { selectVocal(); zh->main.openDop(); }
                         if (args.contains ("--render")) { selectVocal(); zh->main.openRender(); }
                         if (args.contains ("--mixerwin")) zh->main.toggleMixerWindow();
+                        if (args.contains ("--importdemo"))
+                        {
+                            juce::StringArray fs;
+                            for (const auto& e : juce::RangedDirectoryIterator (juce::File (args[args.indexOf ("--importdemo") + 1]), false, "*.wav", juce::File::findFiles)) fs.add (e.getFile().getFullPathName());
+                            fs.sort (true);
+                            juce::Timer::callAfterDelay (1500, [zh, fs] { zh->main.multiImport (fs, nullptr, te::TimePosition()); });
+                        }
                         if (args.contains ("--beat")) zh->main.addBeat();
                         if (args.contains ("--beatlane"))
                             juce::Timer::callAfterDelay (1500, []

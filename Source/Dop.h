@@ -243,12 +243,12 @@ inline juce::AudioBuffer<float> resample (const juce::AudioBuffer<float>& in, do
     return out;
 }
 // faylni yangi sample rate'ga o'girib, 24-bit WAV qilib yozadi. Natija: yangi fayl (yoki bo'sh — xato)
-inline juce::File convertFileRate (te::Engine& e, const juce::File& src, double toRate, juce::String* err = nullptr)
+inline juce::File convertFileRate (te::Engine& e, const juce::File& src, double toRate, juce::String* err = nullptr, juce::File destDir = {})
 {
     juce::AudioBuffer<float> b; double sr = 0;
     if (! readFile (e, src, b, sr) || sr <= 0) { if (err) *err = "o'qib bo'lmadi"; return {}; }
     const auto tag = "_" + juce::String (juce::roundToInt (toRate / 100.0) / 10.0).replace (".0", "") + "k";
-    auto dir = src.getParentDirectory();
+    auto dir = destDir != juce::File() ? destDir : src.getParentDirectory();
     if (! dir.hasWriteAccess()) dir = AppEngine::projectsFolder().getChildFile ("Audio");
     dir.createDirectory();
     auto stem = src.getFileNameWithoutExtension();
