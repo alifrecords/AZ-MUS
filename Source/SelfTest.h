@@ -1130,6 +1130,9 @@ inline int runSelfTest (const juce::StringArray& args)
             bool emb = false;
             { auto mc = std::make_unique<az::MainComponent> (*ah); mc->setSize (1400, 860); juce::Image im (juce::Image::ARGB, 1400, 860, true); juce::Graphics gg (im); mc->paintEntireComponent (gg, false);
               emb = (bool) mc->getTopBar().playB.getProperties()["emboss"]; }
+            az::applyTheme (2); const bool gold = az::red == juce::Colour (0xffffc21a) && az::recRed == az::red && az::flatTheme() && az::bg0 == juce::Colour (0xff050505);
+            { auto mc = std::make_unique<az::MainComponent> (*ah); mc->setSize (1400, 860); juce::Image im (juce::Image::ARGB, 1400, 860, true); juce::Graphics gg (im); mc->paintEntireComponent (gg, false);
+              check (gold, "Mavzu: Sariq (qora + oltin, tekis transport paneli) chiziladi"); }
             az::applyTheme (0); const bool back = az::red == juce::Colour (0xffff3347);
             check (ind && back && emb && az::recRed == juce::Colour (0xffff3347), "Mavzu: AZ Qizil / Indigo almashadi; transport paneli bo'rtma 3D");
             ah->closeProject();

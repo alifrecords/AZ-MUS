@@ -10,20 +10,29 @@ using namespace std::literals;
 
 namespace az
 {
-    // Mavzu (tema) ranglari: o'zgaruvchan — applyTheme() bilan almashtiriladi (0 = AZ Qizil, 1 = Indigo)
+    // Mavzu (tema) ranglari: o'zgaruvchan — applyTheme() bilan almashtiriladi (0 = AZ Qizil, 1 = Indigo, 2 = Sariq)
     inline juce::Colour bg0 { 0xff07070a }, bg1 { 0xff0d0c0f }, bg2 { 0xff121116 }, bg3 { 0xff17151b };
     inline juce::Colour red { 0xffff3347 }, redHot { 0xffff2a3d }, redSoft { 0xffff8a95 }, redDeep { 0xff9a1020 };
-    inline const juce::Colour recRed { 0xffff3347 };      // yozish tugmasi — har doim qizil
+    inline juce::Colour recRed { 0xffff3347 };            // yozish tugmasi (Sariq mavzuda — sariq, qolganlarida qizil)
     inline int themeId = 0;
-    inline constexpr int numThemes = 2;
-    inline const char* themeName (int t) { return t == 1 ? "Indigo" : "AZ Qizil"; }
+    inline constexpr int numThemes = 3;
+    inline const char* themeName (int t) { return t == 1 ? "Indigo" : t == 2 ? "Sariq" : "AZ Qizil"; }
+    inline juce::Colour themeAccent (int t) { return juce::Colour (t == 1 ? 0xff5a62e8 : t == 2 ? 0xffffc21a : 0xffff3347); }
+    inline bool flatTheme() { return themeId == 2; }      // Sariq: tekis (flat) uslub — qora fon, sariq kontur
     inline void applyTheme (int t)
     {
         themeId = juce::jlimit (0, numThemes - 1, t);
+        recRed = juce::Colour (0xffff3347);
         if (themeId == 1)
         {   // Indigo (ko'k-binafsha): "Peace · Security · Reliability"
             bg0 = juce::Colour (0xff07080e); bg1 = juce::Colour (0xff0c0e17); bg2 = juce::Colour (0xff12141f); bg3 = juce::Colour (0xff181b2a);
             red = juce::Colour (0xff5a62e8); redHot = juce::Colour (0xff4c55e6); redSoft = juce::Colour (0xffaab0ff); redDeep = juce::Colour (0xff272b8c);
+        }
+        else if (themeId == 2)
+        {   // Sariq (qora + oltin sariq): tekis, yuqori kontrast
+            bg0 = juce::Colour (0xff050505); bg1 = juce::Colour (0xff0a0a0a); bg2 = juce::Colour (0xff101010); bg3 = juce::Colour (0xff171717);
+            red = juce::Colour (0xffffc21a); redHot = juce::Colour (0xffffb300); redSoft = juce::Colour (0xffffd866); redDeep = juce::Colour (0xff7a5a00);
+            recRed = red;
         }
         else
         {
@@ -96,6 +105,13 @@ namespace az
     inline void logoMark (juce::Graphics& g, juce::Rectangle<float> r)
     {
         g.setColour (redHot.withAlpha (0.22f)); g.fillRoundedRectangle (r.expanded (r.getWidth() * 0.12f), r.getWidth() * 0.34f);
+        if (flatTheme())
+        {   // Sariq: oltin kvadrat, qora "AZ"
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xffffd84a), r.getX(), r.getY(), juce::Colour (0xffe0a000), r.getRight(), r.getBottom(), false));
+            g.fillRoundedRectangle (r, r.getWidth() * 0.27f);
+            label (g, "AZ", r, r.getHeight() * 0.4f, juce::Colour (0xff0a0a0a), juce::Justification::centred, 700);
+            return;
+        }
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xffff5a3a), r.getX(), r.getY(), redDeep, r.getRight(), r.getBottom(), false));
         g.fillRoundedRectangle (r, r.getWidth() * 0.27f);
         label (g, "AZ", r, r.getHeight() * 0.4f, juce::Colours::white, juce::Justification::centred, 700);
@@ -207,7 +223,8 @@ namespace az
             }
             auto cap = Rectangle<float> (cx - 10, pos - 6, 20, 12);
             g.setColour (Colours::black.withAlpha (0.6f)); g.fillRoundedRectangle (cap.translated (0, 2), 3);
-            g.setGradientFill (ColourGradient (Colour (0xffdcd6d7), 0, cap.getY(), Colour (0xff8d8587), 0, cap.getBottom(), false));
+            if (flatTheme()) g.setGradientFill (ColourGradient (Colour (0xffffd84a), 0, cap.getY(), Colour (0xffd99a00), 0, cap.getBottom(), false));
+            else g.setGradientFill (ColourGradient (Colour (0xffdcd6d7), 0, cap.getY(), Colour (0xff8d8587), 0, cap.getBottom(), false));
             g.fillRoundedRectangle (cap, 3);
             g.setColour (Colours::black.withAlpha (0.4f)); g.drawHorizontalLine ((int) cap.getCentreY(), cap.getX() + 3, cap.getRight() - 3);
         }
@@ -220,6 +237,13 @@ namespace az
             const auto acc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"])
                            : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : red;
             const float rad = b.getProperties().getWithDefault ("radius", 7.0f);
+            if (b.getProperties()["emboss"] && flatTheme())
+            {   // Sariq mavzu: tekis transport tugmasi
+                const bool pressed = down || on;
+                g.setColour (Colours::white.withAlpha (pressed ? 0.10f : over ? 0.06f : 0.0f)); g.fillRoundedRectangle (r, rad);
+                if (on) { g.setColour (acc.withAlpha (0.8f)); g.drawRoundedRectangle (r.reduced (0.5f), rad, 1.2f); }
+                return;
+            }
             if (b.getProperties()["emboss"])
             {   // bo'rtma 3D tugma (transport paneli)
                 const bool pressed = down || on;
@@ -239,7 +263,12 @@ namespace az
                 if (on) { g.setColour (acc.withAlpha (0.35f)); g.drawRoundedRectangle (r.reduced (1.5f), rad - 1, 1.5f); }
                 return;
             }
-            g.setColour (on ? acc.withAlpha (0.16f) : Colours::white.withAlpha (down ? 0.09f : over ? 0.06f : 0.03f));
+            if (flatTheme() && on && acc == red)
+            {   // Sariq mavzu: faol tugma — to'liq sariq, qora yozuv
+                g.setColour (over ? acc.brighter (0.15f) : acc); g.fillRoundedRectangle (r, rad);
+                return;
+            }
+            g.setColour (on ? acc.withAlpha (0.16f) : Colours::white.withAlpha (down ? 0.09f : over ? 0.06f : flatTheme() ? 0.02f : 0.03f));
             g.fillRoundedRectangle (r, rad);
             g.setColour (on ? acc.withAlpha (0.55f) : Colours::white.withAlpha (0.08f));
             g.drawRoundedRectangle (r, rad, 1.0f);
@@ -253,6 +282,14 @@ namespace az
                            : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : redSoft;
             auto c = on ? acc.brighter (0.3f) : silver;
             if (b.getProperties()["emboss"]) c = on ? acc.brighter (0.6f) : Colours::white.withAlpha (0.94f);
+            if (flatTheme())
+            {
+                const auto bgAcc = b.getProperties().contains ("accent") ? Colour ((uint32) (int64) b.getProperties()["accent"])
+                                 : b.isColourSpecified (TextButton::buttonOnColourId) ? b.findColour (TextButton::buttonOnColourId).withAlpha (1.0f) : red;
+                const bool themeAcc = bgAcc == red;
+                if (b.getProperties()["emboss"]) c = b.getButtonText() == "#rec" ? recRed : on ? red : Colours::white.withAlpha (0.94f);
+                else if (on && themeAcc) c = Colour (0xff0a0a0a);
+            }
             if (! b.isEnabled()) c = c.withAlpha (0.35f);
             const auto t = b.getButtonText();
             if (auto icon = drawIcon (g, t, b.getLocalBounds().toFloat(), c)) return;

@@ -352,7 +352,7 @@ public:
         iconButton (loopB, "#loop", "Loop (L / Num /)"); iconButton (clickB, "#click", "Metronom (C)");
         for (auto* b : { &startB, &rewB, &ffB, &stopB, &playB, &recB, &loopB, &clickB }) { addAndMakeVisible (b); b->getProperties().set ("emboss", true); b->getProperties().set ("radius", 6.0f); }
         addAndMakeVisible (themeB); themeB.getProperties().set ("radius", 5.0f);
-        themeB.setTooltip (U ("Mavzu (tema): AZ Qizil â Indigo"));
+        themeB.setTooltip (U ("Mavzu (tema): AZ Qizil \xe2\x86\x92 Indigo \xe2\x86\x92 Sariq"));
         themeB.onClick = [this] { if (onTheme) onTheme(); };
         const char* langs[] = { "UZ", "RU", "EN" };
         for (int i = 0; i < 3; ++i)
@@ -418,16 +418,25 @@ public:
         // transport paneli: bo'rtma 3D, mavzu rangida
         {
             auto pr = startB.getBounds().getUnion (lcd.getBounds()).toFloat().expanded (9, 5);
-            embossPanel (g, pr, red, 10);
-            insetWell (g, lcd.getBounds().toFloat(), 10);
+            if (flatTheme())
+            {   // Sariq: tekis qora panel, sariq kontur, displey oldida sariq ajratgich
+                g.setColour (bg1); g.fillRoundedRectangle (pr, 10);
+                g.setColour (red.withAlpha (0.85f)); g.drawRoundedRectangle (pr.reduced (0.75f), 10, 1.5f);
+                const float sx = (float) lcd.getX() - 6;
+                g.setColour (red); g.fillRoundedRectangle (sx - 1.5f, pr.getY() + 10, 3, pr.getHeight() - 20, 1.5f);
+            }
+            else
+            {
+                embossPanel (g, pr, red, 10);
+                insetWell (g, lcd.getBounds().toFloat(), 10);
+            }
         }
         // mavzu tugmasi ikonkasi: ikki rang (joriy mavzu chap tomonda)
         {
             auto tb = themeB.getBounds().toFloat().reduced (7, 6);
-            const Colour a (0xffff3347), b (0xff5a62e8);
             Path l, rr; l.addTriangle (tb.getTopLeft(), tb.getTopRight(), tb.getBottomLeft()); rr.addTriangle (tb.getTopRight(), tb.getBottomRight(), tb.getBottomLeft());
-            g.setColour (themeId == 0 ? a : b); g.fillPath (l);
-            g.setColour (themeId == 0 ? b : a); g.fillPath (rr);
+            g.setColour (themeAccent (themeId)); g.fillPath (l);
+            g.setColour (themeAccent ((themeId + 1) % numThemes)); g.fillPath (rr);   // keyingi mavzu
         }
         if (cpuW > 0)
         {

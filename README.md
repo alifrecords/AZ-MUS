@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.17.0: Uchinchi mavzu: Sariq (qora + oltin)
+
+- UZ / RU / EN yonidagi mavzu tugmasi endi 3 mavzu orasida almashadi: AZ Qizil → Indigo → **Sariq**.
+- Sariq mavzu: chuqur qora fon, oltin sariq aksent, tekis (flat) uslub.
+  - Transport paneli qora fonda, sariq kontur bilan; yozish tugmasi sariq.
+  - Faol tugmalar to'liq sariq, yozuvi qora (MIKSER, til, asboblar).
+  - Fader qopqoqlari, AZ logotipi, Bosh sahifa banneri va playlist kartasi ham sariq.
+- Tanlangan mavzu saqlanadi va keyingi ochilishda qayta yuklanadi.
+- Mavzu tugmasi tooltip'idagi buzilgan belgi tuzatildi.
+
 ## 0.16.2: Stereo / mono treklar — to'g'ri panorama (Cubase kabi)
 
 - **Tuzatildi:** mono audio joylashgan trekda AZ EQ, AZ Imager yoki stereo VST bo'lsa, ovoz faqat chap kanaldan chiqardi. Endi mono manba zanjir boshida ikkala kanalga beriladi. Stereoize ham mono trekda haqiqatan ishlaydi.

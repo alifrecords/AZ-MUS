@@ -645,7 +645,8 @@ private:
         if (avatar.isValid()) { hub::drawCover (g, avatar, av, av.getWidth() * 0.5f); }
         else
         {
-            g.setGradientFill (ColourGradient (Colour (0xffff5a3a), av.getX(), av.getY(), Colour (0xffb98aff), av.getRight(), av.getBottom(), false));
+            if (flatTheme()) g.setGradientFill (ColourGradient (Colour (0xffffd84a), av.getX(), av.getY(), Colour (0xffd98a00), av.getRight(), av.getBottom(), false));
+            else g.setGradientFill (ColourGradient (Colour (0xffff5a3a), av.getX(), av.getY(), Colour (0xffb98aff), av.getRight(), av.getBottom(), false));
             g.fillEllipse (av);
             label (g, nameL.getText().substring (0, 1).toUpperCase(), av, 20, Colours::white, Justification::centred, 700);
         }
@@ -658,7 +659,8 @@ private:
         caps (g, U ("VOSITALAR"), { 30, (float) toolB[0]->getY() - 22, 160, 12 });
         // promo: AZ MUSIC Playlist
         auto pr = promoRect();
-        g.setGradientFill (ColourGradient (Colour (0xff3a0d1a), pr.getX(), pr.getY(), Colour (0xff1a1236), pr.getRight(), pr.getBottom(), false));
+        if (flatTheme()) g.setGradientFill (ColourGradient (Colour (0xff2a2000), pr.getX(), pr.getY(), Colour (0xff121212), pr.getRight(), pr.getBottom(), false));
+        else g.setGradientFill (ColourGradient (Colour (0xff3a0d1a), pr.getX(), pr.getY(), Colour (0xff1a1236), pr.getRight(), pr.getBottom(), false));
         g.fillRoundedRectangle (pr, 12);
         g.setColour (red.withAlpha (hoverPromo ? 0.7f : 0.35f)); g.drawRoundedRectangle (pr.reduced (0.5f), 12, 1.2f);
         // tovush to'lqini bezagi
@@ -679,7 +681,8 @@ private:
         if (page == home)
         {
             auto b = bannerRect();
-            g.setGradientFill (ColourGradient (Colour (0xffff4a5a), b.getX(), b.getY(), Colour (0xff7a2cff), b.getRight(), b.getBottom(), false));
+            if (flatTheme()) g.setGradientFill (ColourGradient (Colour (0xffffd84a), b.getX(), b.getY(), Colour (0xffd98a00), b.getRight(), b.getBottom(), false));
+            else g.setGradientFill (ColourGradient (Colour (0xffff4a5a), b.getX(), b.getY(), Colour (0xff7a2cff), b.getRight(), b.getBottom(), false));
             g.fillRoundedRectangle (b, 14);
             if (hoverBanner) { g.setColour (Colours::white.withAlpha (0.08f)); g.fillRoundedRectangle (b, 14); }
             // fon: tovush to'lqini
@@ -804,7 +807,8 @@ private:
         auto m = mainArea();
         // sarlavha bannari
         auto b = Rectangle<float> (m.getX(), 30, m.getWidth(), 100);
-        g.setGradientFill (ColourGradient (Colour (0xff2a0a14), b.getX(), b.getY(), Colour (0xff12102a), b.getRight(), b.getBottom(), false));
+        if (flatTheme()) g.setGradientFill (ColourGradient (Colour (0xff2a2000), b.getX(), b.getY(), Colour (0xff121212), b.getRight(), b.getBottom(), false));
+        else g.setGradientFill (ColourGradient (Colour (0xff2a0a14), b.getX(), b.getY(), Colour (0xff12102a), b.getRight(), b.getBottom(), false));
         g.fillRoundedRectangle (b, 14);
         label (g, artist.isNotEmpty() ? artist : String ("AZIMXODJAYEV MUSIC"), { b.getX() + 24, b.getY() + 18, 600, 30 }, 22, text, Justification::centredLeft, 800, 0.04f);
         label (g, U ("AZ MUSIC Playlist \xc2\xb7 ") + String (songs.size()) + U (" ta qo'shiq \xc2\xb7 BPM va tonallik bilan \xe2\x80\x94 aranjirovka uchun tayyor"),
