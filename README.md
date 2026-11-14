@@ -6,6 +6,16 @@
 ## 0.1.1: xavfsiz plagin skaneri
 Har bir VST3 plagin AZ MUS'ning alohida nusxasida tekshiriladi (Cubase'dagi kabi). Skanerlash vaqtida qulaydigan yoki 45 soniyadan ko'p javob bermaydigan plagin qora ro'yxatga tushadi, AZ MUS esa ochilishda davom etadi. Splash ekranni bosish skanerlashni o'tkazib yuboradi. Qora ro'yxatni tozalash: Plaginlar → VST3 plaginlarni skanerlash → Options → Clear blacklist.
 
+## 0.16.2: Stereo / mono treklar — to'g'ri panorama (Cubase kabi)
+
+- **Tuzatildi:** mono audio joylashgan trekda AZ EQ, AZ Imager yoki stereo VST bo'lsa, ovoz faqat chap kanaldan chiqardi. Endi mono manba zanjir boshida ikkala kanalga beriladi. Stereoize ham mono trekda haqiqatan ishlaydi.
+- **Tuzatildi:** pan qonuni amalda qo'llanmagan edi (Linear): mono trek chetga surilsa +6 dB, stereo trek surilsa bir kanal +6 dB oshardi.
+- Mono trek: loyiha pan qonuni, standart **-3 dB equal power** (markazda -3 dB, chetda 0 dB, quvvat doimiy). Loyiha → "Pan qonuni (mono treklar)": 0 / -2.5 (Pro Tools) / -3 (Cubase) / -4.5 / -6 dB.
+- Stereo trek: **Stereo Balance** paneri. Markazda 0 dB, surilgan tomon oshmaydi, qarshi tomon pasayadi.
+- Trek menyusi → "Kanal formati": Avto (kliplarga qarab), Mono ((L+R)/2 yig'indi), Stereo. Trek sarlavhasida AUDIO · MONO / STEREO yozuvi ko'rinadi.
+- Audio ulanishlar (F4) → Inputs: "Speakers" ustunini bosib kirishni Mono / Stereo qilish mumkin. Mikrofon uchun Mono tanlang, aks holda vokal faqat chap kanalga yoziladi.
+- Eksport, bounce va render ham xuddi shu qoidalar bilan ishlaydi.
+
 ## 0.16.1: Bir nechta audio — Import parametrlari (Cubase uslubida)
 
 - Explorerdan bir nechta audio (yoki papka) belgilab DAW ga tashlanganda **Import parametrlari** oynasi ochiladi: fayllar ro'yxati (sample rate, bit, stereo/mono, davomiylik). Loyihaga mos kelmaydigan sample rate sariq rangda ko'rsatiladi.

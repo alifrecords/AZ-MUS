@@ -760,7 +760,11 @@ public:
                     add (12, "Kursor joyida kesish", "S"); add (13, "Nusxa", "Ctrl+D"); add (14, "O'chirish", "Del"); m.addSeparator();
                     add (15, "Bounce Selection", "B"); add (16, "Locatorlar = tanlov", "P"); add (17, "Hammasini belgilash", "Ctrl+A"); m.addSeparator();
                     add (18, "Tanlash", "1", vs.tool == 0); add (19, "Qaychi", "2", vs.tool == 1); add (20, "O'chirg'ich", "3", vs.tool == 2); add (21, "Mute", "4", vs.tool == 3); break;
-            case 2: add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); break;
+            case 2: { add (30, "Audio trek qo'shish", "Ctrl+T"); add (31, "Instrument trek qo'shish"); add (32, "Marker qo'shish (kursor joyida)"); m.addSeparator();
+                      juce::PopupMenu pl; const auto cur = app.edit ? projectPanLaw (*app.edit) : te::PanLaw3dBCenter;
+                      for (auto l : { te::PanLawLinear, te::PanLaw2point5dBCenter, te::PanLaw3dBCenter, te::PanLaw4point5dBCenter, te::PanLaw6dBCenter })
+                          pl.addItem (1200 + (int) l, panLawName (l) + (l == te::PanLaw3dBCenter ? U ("  (Cubase standarti, equal power)") : l == te::PanLaw2point5dBCenter ? juce::String ("  (Pro Tools)") : juce::String()), true, cur == l);
+                      m.addSubMenu (U ("Pan qonuni (mono treklar)"), pl); break; }
             case 3: add (42, "Audio ulanishlar (Inputs, Outputs, FX, Control Room)...", "F4"); add (40, "Audio qurilma sozlamalari (ASIO, drayver, bufer)...");
                     add (43, "FX kanal qo'shish..."); add (41, "Yozish uchun kirishlarni yangilash"); m.addSeparator();
                     add (47, "Barcha audiolarni DAW formatiga moslashtirish (sample rate)"); add (48, "Barcha audiolarni asl holiga qaytarish (tempo, ton)"); add (49, "Import so'rovini qayta yoqish (bir nechta fayl)"); m.addSeparator(); add (44, "Direct Offline Processing...", "F7"); add (45, "Render Selection...", "Ctrl+Alt+B"); add (46, "Quantize", "Q"); break;
@@ -782,6 +786,10 @@ public:
         switch (id)
         {
             // loyiha almashtirish faqat MainWindow orqali (UI avval yopiladi -> keyin Edit almashadi; DAW yiqilmaydi)
+            case 1200: case 1201: case 1202: case 1203: case 1204:
+                if (app.edit) { app.edit->getUndoManager().beginNewTransaction ("Pan qonuni"); app.edit->state.setProperty ("azPanLaw", id - 1200, &app.edit->getUndoManager());
+                                syncAllTrackPans (*app.edit); headers.repaint(); toast (U ("Mono treklar pan qonuni: ") + panLawName ((te::PanLaw) (id - 1200))); }
+                break;
             case 1: if (onRequestNew) onRequestNew(); break;
             case 2: chooseFile (U ("Loyihani ochish"), "*.azmus;*.tracktionedit", false, [this] (juce::File f) { if (onRequestOpen) onRequestOpen (f); }); break;
             case 8: if (onRequestHome) onRequestHome(); break;
@@ -1019,7 +1027,7 @@ private:
             lastPos = pos;
             top.refreshState();
         }
-        if (++slow % 15 == 0) { top.refreshState(); status.repaint(); headers.repaint(); }
+        if (++slow % 15 == 0) { top.refreshState(); status.repaint(); headers.repaint(); syncAllTrackPans (*app.edit); }
         if (slow % 3 == 0) headers.repaint (headers.getWidth() - 12, 0, 12, headers.getHeight());
     }
 

@@ -189,6 +189,8 @@ inline void registerAzPlugins (te::Engine& e)
     e.getPluginManager().createBuiltInType<ScopeTapPlugin>();
     e.getPluginManager().createBuiltInType<AzTrackEqPlugin>();
     e.getPluginManager().createBuiltInType<AzImagerPlugin>();
+    e.getPluginManager().createBuiltInType<AzPanPlugin>();
+    syncTrackPansHook = [] (te::Edit& ed) { syncAllTrackPans (ed); };
 }
 
 // AZ BEAT treki: standart kit va boshlang'ich pattern bilan

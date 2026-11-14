@@ -316,6 +316,137 @@ inline void ensureTrackTools (te::AudioTrack& t)
         if (auto p = t.edit.getPluginCache().createNewPlugin (AzImagerPlugin::xmlTypeName, {})) t.pluginList.insertPlugin (p, volIdx(), nullptr);
 }
 
+// =============================================================================  Stereo / mono panorama
+// Muammolar (Tracktion standarti):
+//  1) trek pan qonuni "Linear": mono trek chetga surilsa +6 dB, stereo trek o'ngga surilsa o'ng kanal +6 dB;
+//  2) mono klip zanjirda 1 kanal bo'lib keladi, birinchi stereo plagin (AZ EQ, Imager, VST) uni [L, 0] qiladi —
+//     ovoz faqat chap kanaldan chiqadi.
+// Yechim — ikki yashirin "azpan" bosqichi:
+//  · role "in"  — zanjir boshida: mono manba -> ikkala kanalga (L=R); majburiy Mono trekda (L+R)/2 yig'indi;
+//  · role "bal" — fader'dan darhol oldin: stereo trekda Stereo Balance (Cubase): VolumeAndPan Linear (L=1-p, R=1+p)
+//    ishlaydi, "bal" esa oshadigan tomonni 1/(1+|p|) ga kamaytiradi (kanal gainlari kommutativ) — aniq balans.
+//    Mono trekda VolumeAndPan loyiha pan qonunini (standart -3 dB equal power) o'zi qo'llaydi.
+class AzPanPlugin : public te::Plugin
+{
+public:
+    static const char* getPluginName() { return "AZ Pan"; }
+    static inline const char* xmlTypeName = "azpan";
+    explicit AzPanPlugin (te::PluginCreationInfo info) : te::Plugin (info) { inputStage = state.getProperty ("role").toString() == "in"; }
+    ~AzPanPlugin() override { notifyListenersOfDeletion(); }
+    juce::String getName() const override                { return getPluginName(); }
+    juce::String getPluginType() override                { return xmlTypeName; }
+    juce::String getSelectableDescription() override     { return getName(); }
+    BusLayout getBusses() const override                 { return BusLayout::singlePassThrough(); }
+    int getNumOutputChannelsGivenInputs (int numInputs) override
+    {
+        if (inputStage) { inputs = numInputs; return 2; }
+        return numInputs;
+    }
+    void initialise (const te::PluginInitialisationInfo& info) override
+    {
+        for (auto& g : sm) { g.reset (info.sampleRate > 0 ? info.sampleRate : 48000.0, 0.015); g.setCurrentAndTargetValue (1.0f); }
+    }
+    void deinitialise() override {}
+    static void balanceGains (float p, float& l, float& r) noexcept   // Linear'dan balansga o'tkazish koeffitsienti
+    {
+        p = juce::jlimit (-1.0f, 1.0f, p);
+        l = p < 0 ? 1.0f / (1.0f - p) : 1.0f;
+        r = p > 0 ? 1.0f / (1.0f + p) : 1.0f;
+    }
+    void applyToBuffer (const te::PluginRenderContext& fc) override
+    {
+        if (fc.destBuffer == nullptr || fc.destBuffer->getNumChannels() < 2) return;
+        auto* l = fc.destBuffer->getWritePointer (0, fc.bufferStartSample); auto* r = fc.destBuffer->getWritePointer (1, fc.bufferStartSample);
+        const int n = fc.bufferNumSamples;
+        if (inputStage)
+        {
+            if (inputs.load() == 1) juce::FloatVectorOperations::copy (r, l, n);                       // mono manba -> L=R
+            else if (downmix.load()) for (int i = 0; i < n; ++i) { const float m = 0.5f * (l[i] + r[i]); l[i] = r[i] = m; }
+            return;
+        }
+        float gl = 1, gr = 1;
+        if (stereo.load())
+            if (auto* t = dynamic_cast<te::AudioTrack*> (getOwnerTrack()))
+                if (auto* vp = t->getVolumePlugin(); vp != nullptr && vp->isEnabled())
+                    balanceGains (vp->getPan(), gl, gr);
+        sm[0].setTargetValue (gl); sm[1].setTargetValue (gr);
+        if (! sm[0].isSmoothing() && ! sm[1].isSmoothing() && gl == 1.0f && gr == 1.0f) return;
+        sm[0].applyGain (l, n); sm[1].applyGain (r, n);
+    }
+    bool inputStage = false;
+    std::atomic<bool> stereo { true }, downmix { false };
+    std::atomic<int> inputs { 2 };
+private:
+    juce::SmoothedValue<float> sm[2];
+};
+
+// trek kanal formati: 0 = Avto (kliplarga qarab), 1 = Mono, 2 = Stereo
+enum ChannelMode { chAuto = 0, chMono = 1, chStereo = 2 };
+inline int channelMode (const te::AudioTrack& t) { return juce::jlimit (0, 2, (int) t.state.getProperty ("azChMode", 0)); }
+inline bool trackIsMono (te::AudioTrack& t)
+{
+    if (const int m = channelMode (t); m != chAuto) return m == chMono;
+    for (auto p : t.pluginList.getPlugins()) if (p->isSynth() || p->getPluginType() == "azbeat") return false;   // instrument = stereo
+    bool any = false;
+    for (auto* c : t.getClips())
+    {
+        auto* w = dynamic_cast<te::WaveAudioClip*> (c);
+        if (w == nullptr) return false;                    // MIDI klip — instrument
+        const int n = w->getAudioFile().getNumChannels();
+        if (n > 1 && w->getActiveChannels().size() > 1) return false;
+        any |= n > 0;
+    }
+    return any;                                            // bo'sh trek — stereo
+}
+inline te::PanLaw projectPanLaw (const te::Edit& e)
+{
+    const int v = e.state.getProperty ("azPanLaw", (int) te::PanLaw3dBCenter);
+    return v >= (int) te::PanLawLinear && v <= (int) te::PanLaw6dBCenter ? (te::PanLaw) v : te::PanLaw3dBCenter;
+}
+inline juce::String panLawName (te::PanLaw l)
+{
+    switch (l) { case te::PanLawLinear: return "0 dB"; case te::PanLaw2point5dBCenter: return "-2.5 dB"; case te::PanLaw4point5dBCenter: return "-4.5 dB";
+                 case te::PanLaw6dBCenter: return "-6 dB"; default: return "-3 dB"; }
+}
+inline AzPanPlugin* findPan (te::AudioTrack& t, bool inputStage = false)
+{
+    for (auto p : t.pluginList.getPlugins()) if (auto* e = dynamic_cast<AzPanPlugin*> (p); e != nullptr && e->inputStage == inputStage) return e;
+    return nullptr;
+}
+// trek pan qonunini kanal formatiga moslash (tez: o'zgarmasa hech narsa yozmaydi; undo tarixiga tushmaydi)
+inline void syncTrackPan (te::AudioTrack& t)
+{
+    auto* vp = t.getVolumePlugin(); if (vp == nullptr) return;
+    auto ensure = [&t] (bool in) -> AzPanPlugin*
+    {
+        if (auto* f = findPan (t, in)) return f;
+        juce::ValueTree v (te::IDs::PLUGIN); v.setProperty (te::IDs::type, AzPanPlugin::xmlTypeName, nullptr);
+        if (in) v.setProperty ("role", "in", nullptr);
+        if (auto p = t.edit.getPluginCache().createNewPlugin (v)) { t.state.addChild (p->state, -1, nullptr); return findPan (t, in); }
+        return nullptr;
+    };
+    auto* in = ensure (true); auto* bal = ensure (false);
+    // tartib: [in] -> foydalanuvchi insertlari / EQ / Imager -> [bal] -> fader
+    if (bal != nullptr)
+    {
+        const int bi = t.state.indexOf (bal->state), vi = t.state.indexOf (vp->state);
+        if (bi >= 0 && vi >= 0 && bi != vi - 1) t.state.moveChild (bi, bi < vi ? vi - 1 : vi, nullptr);
+    }
+    if (in != nullptr)
+    {
+        int first = -1;
+        for (int i = 0; i < t.state.getNumChildren(); ++i) if (t.state.getChild (i).hasType (te::IDs::PLUGIN)) { first = i; break; }
+        const int ii = t.state.indexOf (in->state);
+        if (first >= 0 && ii > first) t.state.moveChild (ii, first, nullptr);
+    }
+    const bool mono = trackIsMono (t);
+    const int law = mono ? (int) projectPanLaw (t.edit) : (int) te::PanLawLinear;
+    if ((int) vp->state.getProperty (te::IDs::panLaw, -1) != law) vp->state.setProperty (te::IDs::panLaw, law, nullptr);
+    if (bal) bal->stereo = ! mono;
+    if (in) in->downmix = channelMode (t) == chMono;
+}
+inline void syncAllTrackPans (te::Edit& e) { for (auto* t : te::getAudioTracks (e)) syncTrackPan (*t); }
+
 // =============================================================================  EQ ko'rinishi (Ozone Equalizer)
 class EqView : public juce::Component, private juce::Timer
 {

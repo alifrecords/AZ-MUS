@@ -3,6 +3,7 @@
 // =============================================================================
 #pragma once
 #include "AppEngine.h"
+#include "TrackTools.h"
 #include <set>
 
 namespace az
@@ -1126,7 +1127,8 @@ public:
             if (t->itemID == vs.selectedTrack) { g.setColour (red.withAlpha (0.06f)); g.fillRect (r); }
             g.setColour (t->getColour()); g.fillRoundedRectangle (10, y + 9, 4, (float) vs.trackH - 18, 2);
             label (g, t->getName(), { 22, y + 16, W - 120, 18 }, 12.5f, text, Justification::centredLeft, 600);
-            caps (g, AppEngine::isInstrumentTrack (*t) ? "INSTRUMENT" : "AUDIO", { 22, y + 36, 120, 12 }, 9.0f, dim2);
+            caps (g, AppEngine::isInstrumentTrack (*t) ? juce::String ("INSTRUMENT") : juce::String ("AUDIO") + (trackIsMono (*t) ? U ("  \xc2\xb7  MONO") : U ("  \xc2\xb7  STEREO")) + (channelMode (*t) != chAuto ? "*" : ""),
+                  { 22, y + 36, 160, 12 }, 9.0f, dim2);
             // M S R tugmalari
             const bool st[3] = { t->isMuted (false), t->isSolo (false), app.isArmed (*t) };
             const Colour cs[3] = { yellow, green, red };
@@ -1237,13 +1239,26 @@ public:
         m.addItem (1, U ("Nomini o'zgartirish"));
         for (int i = 0; i < 8; ++i) col.addColouredItem (100 + i, U ("\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"), trackColours[i]);
         m.addSubMenu (U ("Rang"), col);
+        if (! AppEngine::isInstrumentTrack (t))
+        {
+            juce::PopupMenu fm; const int cm = channelMode (t); const bool mono = trackIsMono (t);
+            fm.addItem (200, U ("Avto (kliplarga qarab: hozir ") + (cm == chAuto ? (mono ? "Mono" : "Stereo") : juce::String ("-")) + ")", true, cm == chAuto);
+            fm.addItem (201, U ("Mono  \xe2\x80\x94 pan qonuni ") + panLawName (projectPanLaw (*app.edit)), true, cm == chMono);
+            fm.addItem (202, U ("Stereo  \xe2\x80\x94 balans (markaz 0 dB)"), true, cm == chStereo);
+            m.addSubMenu (U ("Kanal formati (Mono / Stereo)"), fm);
+        }
         m.addSeparator(); m.addItem (2, U ("Trekni o'chirish"));
         te::Track::Ptr tp (&t);
         m.showMenuAsync ({}, [this, tp] (int r)
         {
             if (r == 1) rename (*dynamic_cast<te::AudioTrack*> (tp.get()));
             if (r == 3) if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get())) if (auto* bp = beatOf (*at)) bp->showWindowExplicitly();
-            if (r >= 100) tp->setColour (trackColours[r - 100]);
+            if (r >= 200 && r <= 202) if (auto* at = dynamic_cast<te::AudioTrack*> (tp.get()))
+            {
+                app.edit->getUndoManager().beginNewTransaction (U ("Kanal formati"));
+                at->state.setProperty ("azChMode", r - 200, &app.edit->getUndoManager()); syncTrackPan (*at);
+            }
+            if (r >= 100 && r < 108) tp->setColour (trackColours[r - 100]);
             if (r == 2) { app.edit->getUndoManager().beginNewTransaction ("Trek"); app.edit->deleteTrack (tp.get()); vs.changed(); }
             repaint();
         });

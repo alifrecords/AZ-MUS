@@ -332,8 +332,8 @@ inline int runSelfTest (const juce::StringArray& args)
     // Pro Tools uslubi: master 0 dB, pan law -2.5 dB
     {
         auto a4 = std::make_unique<az::AppEngine>(); a4->newProject (dir.getChildFile ("pt.azmus"));
-        check (std::abs (a4->edit->getMasterVolumePlugin()->getVolumeDb()) < 0.05f && te::getDefaultPanLaw() == te::PanLaw2point5dBCenter,
-               "Pro Tools uslubi: master 0 dB (unity), pan law -2.5 dB");
+        check (std::abs (a4->edit->getMasterVolumePlugin()->getVolumeDb()) < 0.05f && te::getDefaultPanLaw() == te::PanLaw3dBCenter,
+               "Master 0 dB (unity), standart pan qonuni -3 dB (Cubase)");
     }
 
     // Control Room · Monitor Match: monitorda ishlaydi, eksportga TUSHMAYDI
@@ -1433,6 +1433,73 @@ inline int runSelfTest (const juce::StringArray& args)
             check (changed && same, "M.A.R.I.O.: variant yasaladi, 0-variant asl patternga qaytaradi");
             ed.applyStyleUI (clave);
             check (bp->stepVel (5, 3) > 0, "DRUM-SEQ: ritm menyusidan uslub qo'yiladi");
+        }
+    }
+
+    // ================= 0.16.2: stereo / mono treklar (pan qonuni, Imager, Stereoize, eksport)
+    {
+        auto ai = std::make_unique<az::AppEngine>(); ai->newProject (dir.getChildFile ("t162.azmus"));
+        auto& e = *ai->edit; for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+        auto sd = dir.getChildFile ("SM"); sd.deleteRecursively(); sd.createDirectory();
+        auto mk = [&] (const juce::String& n, int chans, float gl, float gr)
+        {
+            const int sr = 48000, N = sr * 2; juce::AudioBuffer<float> b (chans, N);
+            for (int i = 0; i < N; ++i) { const float v = std::sin ((float) (6.283185307 * 440.0 * i / sr)); b.setSample (0, i, gl * v); if (chans > 1) b.setSample (1, i, gr * v); }
+            juce::WavAudioFormat wav; auto f = sd.getChildFile (n);
+            if (auto w = std::unique_ptr<juce::AudioFormatWriter> (wav.createWriterFor (new juce::FileOutputStream (f), sr, (unsigned) chans, 24, {}, 0))) w->writeFromAudioSampleBuffer (b, 0, N);
+            return f;
+        };
+        const auto monoF = mk ("mono.wav", 1, 0.5f, 0), stF = mk ("stereo.wav", 2, 0.5f, 0.5f), lOnly = mk ("chapgina.wav", 2, 0.5f, 0.0f);
+        int nr = 0;
+        struct LR { double l, r; };
+        auto measure = [&] (const juce::File& src, std::function<void (te::AudioTrack&)> cfg) -> LR
+        {
+            for (auto* t : te::getAudioTracks (e)) e.deleteTrack (t);
+            auto* t = ai->addAudioTrack ("SM"); t->insertWaveClip ("c", src, { te::TimeRange (te::TimePosition(), te::TimePosition::fromSeconds (2.0)), {} }, false);
+            if (cfg) cfg (*t);
+            const auto out = sd.getChildFile ("r" + juce::String (++nr) + ".wav"); ai->exportWav (out, 32);
+            juce::AudioBuffer<float> b; double sr = 48000; az::dop::readFile (ai->engine, out, b, sr);
+            const int a = (int) (0.5 * sr), n = (int) sr;
+            auto db = [&] (int c) { return c < b.getNumChannels() ? (double) juce::Decibels::gainToDecibels (b.getRMSLevel (c, a, n), -200.0f) : -999.0; };
+            return { db (0), db (1) };
+        };
+        const double ref = juce::Decibels::gainToDecibels (0.5f / std::sqrt (2.0f));   // -9.03 dB RMS
+        auto pr = [&] (const char* nm, LR v) { std::printf ("       %-34s L %7.2f  R %7.2f  (ref %.2f)\n", nm, v.l - ref, v.r - ref, 0.0); };
+        const auto mC = measure (monoF, nullptr);                                                         pr ("mono, pan C", mC);
+        const auto mL = measure (monoF, [] (te::AudioTrack& t) { t.getVolumePlugin()->setPan (-1.0f); }); pr ("mono, pan L100", mL);
+        const auto sC = measure (stF, nullptr);                                                           pr ("stereo, pan C", sC);
+        const auto sR = measure (stF, [] (te::AudioTrack& t) { t.getVolumePlugin()->setPan (1.0f); });   pr ("stereo, pan R100", sR);
+        const auto lC = measure (lOnly, nullptr);                                                         pr ("faqat L kanalli stereo, pan C", lC);
+        const auto mW = measure (monoF, [] (te::AudioTrack& t) { az::ensureTrackTools (t); if (auto* im = az::findImager (t)) { im->set ("stz", 1); im->set ("stzAmt", 100); } });
+        pr ("mono + Stereoize 100", mW);
+        const auto sN = measure (lOnly, [] (te::AudioTrack& t) { az::ensureTrackTools (t); if (auto* im = az::findImager (t)) for (int b = 0; b < 4; ++b) im->setWidth (b, -100); });
+        pr ("L-stereo + Imager -100 (mono)", sN);
+        const auto mT = measure (monoF, [] (te::AudioTrack& t) { az::ensureTrackTools (t); }); pr ("mono + AZ EQ/Imager (o'chiq)", mT);
+        const auto mL50 = measure (monoF, [] (te::AudioTrack& t) { t.getVolumePlugin()->setPan (-0.5f); }); pr ("mono, pan L50", mL50);
+        const auto sR50 = measure (stF, [] (te::AudioTrack& t) { t.getVolumePlugin()->setPan (0.5f); });   pr ("stereo, pan R50", sR50);
+        const auto mF  = measure (monoF, [] (te::AudioTrack& t) { t.state.setProperty ("azChMode", (int) az::chStereo, nullptr); t.getVolumePlugin()->setPan (1.0f); }); pr ("mono fayl, majburan Stereo, R100", mF);
+        const auto sM  = measure (lOnly, [] (te::AudioTrack& t) { t.state.setProperty ("azChMode", (int) az::chMono, nullptr); }); pr ("L-stereo, majburan Mono, C", sM);
+        e.state.setProperty ("azPanLaw", (int) te::PanLaw2point5dBCenter, nullptr);
+        const auto m25 = measure (monoF, nullptr); pr ("mono, pan C, qonun -2.5 dB", m25);
+        e.state.removeProperty ("azPanLaw", nullptr);
+        auto near = [] (double a, double b) { return std::abs (a - b) < 0.05; };
+        const double p50l = juce::Decibels::gainToDecibels (std::sin (0.75 * juce::MathConstants<double>::halfPi)), p50r = juce::Decibels::gainToDecibels (std::sin (0.25 * juce::MathConstants<double>::halfPi));
+        check (near (mC.l - ref, -3.01) && near (mC.r - ref, -3.01) && near (mL.l - ref, 0) && mL.r < -100 && near (mL50.l - ref, p50l) && near (mL50.r - ref, p50r),
+               "Mono trek: -3 dB equal power (markaz -3 dB, chet 0 dB, quvvat doimiy)");
+        check (near (sC.l - ref, 0) && near (sC.r - ref, 0) && near (sR.r - ref, 0) && sR.l < -100 && near (sR50.r - ref, 0) && near (sR50.l - ref, -6.02),
+               "Stereo trek: balans paneri (markaz 0 dB, surilgan tomon oshmaydi, qarshi tomon pasayadi)");
+        check (near (lC.l - ref, 0) && lC.r < -100, "Stereo fayl kanallari almashmaydi / aralashmaydi");
+        check (near (mF.r - ref, 0) && mF.l < -100 && near (sM.l - ref, -9.03) && near (sM.r - ref, -9.03) && near (m25.l - ref, -2.5),
+               "Kanal formati (Avto/Mono/Stereo) va loyiha pan qonuni ishlaydi");
+        check (near (mT.l - ref, -3.01) && near (mT.r - ref, -3.01), "Mono trek + AZ EQ/Imager: ovoz ikkala kanalda (faqat chapda emas)");
+        check (near (sN.l - ref, -6.02) && near (sN.r - ref, -6.02), "AZ Imager -100: to'g'ri mono yig'indi (L+R)/2");
+        {   // azpan undo tarixiga tushmaydi va foydalanuvchi plaginlari ro'yxatida ko'rinmaydi
+            auto* t = te::getAudioTracks (e)[0]; bool hidden = az::findPan (*t) != nullptr;
+            for (auto* p : az::AppEngine::userPlugins (*t)) hidden &= p->getPluginType() != "azpan";
+            az::ensureTrackTools (*t); az::syncTrackPan (*t);
+            const auto& pl = t->pluginList.getPlugins(); const int vi = pl.indexOf (t->getVolumePlugin());
+            check (hidden && vi > 0 && pl[vi - 1]->getPluginType() == "azpan" && pl[0]->getPluginType() == "azpan" && az::findPan (*t, true) == pl[0].get(),
+                   "AZ Pan yashirin (insertlarda yo'q): kirish bosqichi zanjir boshida, balans fader'dan oldin");
         }
     }
 

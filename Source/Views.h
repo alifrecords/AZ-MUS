@@ -526,7 +526,7 @@ public:
     void refresh()
     {
         auto* t = track();
-        if (t != nullptr) ensureTrackTools (*t);           // har trekda o'z AZ EQ va AZ Imager'i
+        if (t != nullptr) { ensureTrackTools (*t); syncTrackPan (*t); }           // har trekda o'z AZ EQ va AZ Imager'i
         eqView.setPlugins (t ? findTrackEq (*t) : nullptr, t ? findImager (*t) : nullptr);
         imagerView.setPlugin (t ? findImager (*t) : nullptr);
         eqView.setVisible (t != nullptr); imagerView.setVisible (t != nullptr);

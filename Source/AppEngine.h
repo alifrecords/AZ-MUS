@@ -305,6 +305,7 @@ inline juce::String pluginDisplayName (te::Plugin& p)
 }
 
 inline void registerAzPlugins (te::Engine&);
+inline void (*syncTrackPansHook) (te::Edit&) = nullptr;   // TrackTools.h: mono/stereo pan qonunini moslash
 
 // Eksport/bounce paytida Control Room (monitor sozlamalari) miksga ta'sir qilmasin
 struct ScopedControlRoomBypass
@@ -312,6 +313,7 @@ struct ScopedControlRoomBypass
     // Control Room va undan keyingi barcha plaginlar (Monitor Match, CR insertlar) — faqat monitor uchun
     explicit ScopedControlRoomBypass (te::Edit& e)
     {
+        if (syncTrackPansHook) syncTrackPansHook (e);    // render ham mono/stereo panni to'g'ri qo'llasin
         bool after = false;
         for (auto p : e.getMasterPluginList().getPlugins())
         {
@@ -339,7 +341,7 @@ public:
         engine.getPropertyStorage().getAppCacheFolder().createDirectory();
         engine.getPluginManager().initialiseAirWindows();
         registerAzPlugins (engine);
-        te::setDefaultPanLaw (te::PanLaw2point5dBCenter);   // Pro Tools kabi: -2.5 dB markaz
+        te::setDefaultPanLaw (te::PanLaw3dBCenter);   // Cubase kabi: -3 dB equal power (trekda loyiha sozlamasi ustun)
         startTimer (60 * 1000);   // avto-saqlash
     }
 
@@ -506,7 +508,7 @@ public:
     {
         return dynamic_cast<te::VolumeAndPanPlugin*> (p) == nullptr && dynamic_cast<te::LevelMeterPlugin*> (p) == nullptr
             && dynamic_cast<te::AuxSendPlugin*> (p) == nullptr && dynamic_cast<te::AuxReturnPlugin*> (p) == nullptr
-            && p->getPluginType() != "azscope" && p->getPluginType() != "azeq" && p->getPluginType() != "azimager";
+            && p->getPluginType() != "azscope" && p->getPluginType() != "azeq" && p->getPluginType() != "azimager" && p->getPluginType() != "azpan";
     }
     // treklarni qayta tartiblash: audio treklar ro'yxatida `target` joyiga (0..n)
     bool moveTrackTo (te::AudioTrack& t, int target)

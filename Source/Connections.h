@@ -223,6 +223,13 @@ private:
         auto& dm = app.engine.getDeviceManager();
         if (tab == 0 && c == 0) if (auto* w = dm.getWaveInDevice (r)) { w->setEnabled (! w->isEnabled()); if (app.edit) app.setupInputs(); rebuild(); }
         if (tab == 1 && c == 0) if (auto* w = dm.getWaveOutDevice (r)) { dm.setDefaultWaveOutDevice (w->getDeviceID()); rebuild(); }
+        if (tab == 0 && c == 1)    // Cubase Audio Connections: kirish bus'i Mono <-> Stereo (mikrofon uchun Mono)
+            if (auto* w = dm.getWaveInDevice (r))
+            {
+                w->setStereoPair (! w->isStereoPair());
+                juce::Component::SafePointer<ConnectionsComponent> sp (this);
+                juce::MessageManager::callAsync ([sp] { if (sp == nullptr) return; if (sp->app.edit) sp->app.setupInputs(); sp->rebuild(); if (sp->onChanged) sp->onChanged(); });
+            }
     }
     void doubleClicked (int r, int c)
     {
